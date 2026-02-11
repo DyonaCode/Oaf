@@ -4,35 +4,30 @@ on:
   pull_request_review:
     types:
       - submitted
-  workflow_dispatch: 
+  workflow_dispatch:
 
 permissions:
   contents: read
   pull-requests: read
 
 concurrency:
-  group: pr-test-and-merge-${{ github.event.pull_request.number }}
+  group: pr-test-and-merge-batch
   cancel-in-progress: true
 
 jobs:
-  admin_approval_check:
+  discover_prs:
     runs-on: ubuntu-latest
     outputs:
-      is_admin: ${{ steps.check.outputs.is_admin }}
-      pr_number: ${{ steps.check.outputs.pr_number }}
-      head_sha: ${{ steps.check.outputs.head_sha }}
-      author_is_admin: ${{ steps.check.outputs.author_is_admin }}
+      dotnet_matrix: ${{ steps.discover.outputs.dotnet_matrix }}
+      pr_matrix: ${{ steps.discover.outputs.pr_matrix }}
+      eligible_count: ${{ steps.discover.outputs.eligible_count }}
     steps:
-      - name: Verify reviewer is admin
-        id: check
+      - name: Discover eligible PRs
+        id: discover
         uses: actions/github-script@v7
         with:
           script: |
             const { owner, repo } = context.repo;
-            const reviewer = context.payload.review.user.login;
-            const author = context.payload.pull_request.user.login;
-            const prNumber = context.payload.pull_request.number;
-            const reviewState = (context.payload.review.state || "").toLowerCase();
 
             async function getPermission(username) {
               try {
@@ -50,39 +45,86 @@ jobs:
               }
             }
 
-            const reviewerPermission = await getPermission(reviewer);
-            const authorPermission = await getPermission(author);
-            const authorIsAdmin = authorPermission === "admin";
-            const reviewerIsAdmin = reviewState === "approved" && reviewerPermission === "admin";
-            const isAdmin = authorIsAdmin || reviewerIsAdmin;
+            const openPrs = await github.paginate(github.rest.pulls.list, {
+              owner,
+              repo,
+              state: "open",
+              per_page: 100
+            });
 
-            core.info(`PR author ${author} permission: ${authorPermission}`);
-            core.info(`Reviewer ${reviewer} permission: ${reviewerPermission}`);
-            core.setOutput("is_admin", isAdmin ? "true" : "false");
-            core.setOutput("pr_number", String(prNumber));
-            core.setOutput("head_sha", context.payload.pull_request.head.sha);
-            core.setOutput("author_is_admin", authorIsAdmin ? "true" : "false");
+            const eligiblePrs = [];
 
-            if (!isAdmin) {
-              core.warning(`Skipping: PR author is not admin and this review is not an admin approval.`);
+            for (const pr of openPrs) {
+              const author = pr.user.login;
+              const authorPermission = await getPermission(author);
+              const authorIsAdmin = authorPermission === "admin";
+              let hasAdminApproval = authorIsAdmin;
+
+              if (!authorIsAdmin) {
+                const reviews = await github.paginate(github.rest.pulls.listReviews, {
+                  owner,
+                  repo,
+                  pull_number: pr.number,
+                  per_page: 100
+                });
+
+                const approvedUsers = [...new Set(
+                  reviews
+                    .filter((review) => review.state === "APPROVED")
+                    .map((review) => review.user?.login)
+                    .filter(Boolean)
+                )];
+
+                for (const username of approvedUsers) {
+                  const permission = await getPermission(username);
+                  if (permission === "admin") {
+                    hasAdminApproval = true;
+                    break;
+                  }
+                }
+              }
+
+              if (!hasAdminApproval) {
+                core.info(`Skipping PR #${pr.number}: author is not admin and no admin approval exists.`);
+                continue;
+              }
+
+              eligiblePrs.push({
+                pr_number: pr.number,
+                head_sha: pr.head.sha,
+                author_is_admin: authorIsAdmin
+              });
             }
 
+            const dotnetInclude = [];
+            for (const pr of eligiblePrs) {
+              for (const os of ["ubuntu-latest", "macos-latest", "windows-latest"]) {
+                dotnetInclude.push({
+                  pr_number: pr.pr_number,
+                  head_sha: pr.head_sha,
+                  author_is_admin: pr.author_is_admin,
+                  os
+                });
+              }
+            }
+
+            core.setOutput("dotnet_matrix", JSON.stringify({ include: dotnetInclude }));
+            core.setOutput("pr_matrix", JSON.stringify({ include: eligiblePrs }));
+            core.setOutput("eligible_count", String(eligiblePrs.length));
+            core.info(`Eligible PRs discovered: ${eligiblePrs.length}`);
+
   dotnet_tests:
-    if: needs.admin_approval_check.outputs.is_admin == 'true'
-    needs: admin_approval_check
+    if: needs.discover_prs.outputs.eligible_count != '0'
+    needs: discover_prs
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
-      matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
-          - windows-latest
+      matrix: ${{ fromJSON(needs.discover_prs.outputs.dotnet_matrix) }}
     steps:
       - name: Checkout PR merge ref
         uses: actions/checkout@v4
         with:
-          ref: refs/pull/${{ needs.admin_approval_check.outputs.pr_number }}/merge
+          ref: refs/pull/${{ matrix.pr_number }}/merge
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -99,14 +141,17 @@ jobs:
         run: dotnet run --configuration Release -- --self-test
 
   c_runtime_smoke:
-    if: needs.admin_approval_check.outputs.is_admin == 'true'
-    needs: admin_approval_check
+    if: needs.discover_prs.outputs.eligible_count != '0'
+    needs: discover_prs
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.discover_prs.outputs.pr_matrix) }}
     steps:
       - name: Checkout PR merge ref
         uses: actions/checkout@v4
         with:
-          ref: refs/pull/${{ needs.admin_approval_check.outputs.pr_number }}/merge
+          ref: refs/pull/${{ matrix.pr_number }}/merge
 
       - name: Configure CMake
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -127,24 +172,43 @@ jobs:
           ./build/oaflang_advanced_concurrency_smoke
 
   merge_pr:
-    if: needs.admin_approval_check.outputs.is_admin == 'true'
+    if: needs.discover_prs.outputs.eligible_count != '0'
     needs:
-      - admin_approval_check
+      - discover_prs
       - dotnet_tests
       - c_runtime_smoke
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.discover_prs.outputs.pr_matrix) }}
     steps:
       - name: Merge pull request
         uses: actions/github-script@v7
         with:
           script: |
             const { owner, repo } = context.repo;
-            const prNumber = Number("${{ needs.admin_approval_check.outputs.pr_number }}");
-            const expectedHeadSha = "${{ needs.admin_approval_check.outputs.head_sha }}";
-            const authorIsAdmin = "${{ needs.admin_approval_check.outputs.author_is_admin }}" === "true";
+            const prNumber = Number("${{ matrix.pr_number }}");
+            const expectedHeadSha = "${{ matrix.head_sha }}";
+            const authorIsAdmin = "${{ matrix.author_is_admin }}" === "true";
+
+            async function getPermission(username) {
+              try {
+                const permissionResult = await github.rest.repos.getCollaboratorPermissionLevel({
+                  owner,
+                  repo,
+                  username
+                });
+                return permissionResult.data.permission;
+              } catch (error) {
+                if (error.status !== 404) {
+                  throw error;
+                }
+                return "none";
+              }
+            }
 
             const pr = await github.rest.pulls.get({
               owner,
@@ -173,26 +237,16 @@ jobs:
               const approvedUsers = [...new Set(
                 reviews
                   .filter((review) => review.state === "APPROVED")
-                  .map((review) => review.user.login)
+                  .map((review) => review.user?.login)
+                  .filter(Boolean)
               )];
 
               let hasAdminApproval = false;
               for (const username of approvedUsers) {
-                try {
-                  const permissionResult = await github.rest.repos.getCollaboratorPermissionLevel({
-                    owner,
-                    repo,
-                    username
-                  });
-
-                  if (permissionResult.data.permission === "admin") {
-                    hasAdminApproval = true;
-                    break;
-                  }
-                } catch (error) {
-                  if (error.status !== 404) {
-                    throw error;
-                  }
+                const permission = await getPermission(username);
+                if (permission === "admin") {
+                  hasAdminApproval = true;
+                  break;
                 }
               }
 
