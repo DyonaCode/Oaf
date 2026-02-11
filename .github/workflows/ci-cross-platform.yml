@@ -1,0 +1,64 @@
+name: ci-cross-platform
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+
+jobs:
+  dotnet-tests:
+    name: Dotnet Self-Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --configuration Release --no-restore
+
+      - name: Run self-test suite
+        run: dotnet run --configuration Release -- --self-test
+
+  c-runtime-smoke:
+    name: C Runtime Smoke (ubuntu)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure CMake
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build runtime and smoke tests
+        run: cmake --build build --config Release
+
+      - name: Execute smoke binaries
+        run: |
+          ./build/oaflang_error_smoke
+          ./build/oaflang_memory_smoke
+          ./build/oaflang_runtime_smoke
+          ./build/oaflang_types_smoke
+          ./build/oaflang_concurrency_smoke
+          ./build/oaflang_ffi_smoke
+          ./build/oaflang_collections_smoke
+          ./build/oaflang_stdlib_smoke
+          ./build/oaflang_advanced_concurrency_smoke

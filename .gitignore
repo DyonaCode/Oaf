@@ -1,0 +1,11 @@
+bin/
+obj/
+out/
+dist/
+benchmarks/results/
+.oaf/
+.vs/
+.idea/
+*.user
+*.suo
+*.DS_Store

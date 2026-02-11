@@ -1,0 +1,104 @@
+using OafLang.Frontend.Compiler.AST;
+using OafLang.Tests.Framework;
+
+namespace OafLang.Tests.Unit.Parser;
+
+public static class ParserTests
+{
+    public static IReadOnlyList<(string Name, Action Test)> GetTests()
+    {
+        return
+        [
+            ("respects_binary_precedence", RespectsBinaryPrecedence),
+            ("recovers_after_missing_semicolon", RecoversAfterMissingSemicolon),
+            ("parses_type_declarations", ParsesTypeDeclarations),
+            ("parses_typed_variable_declaration", ParsesTypedVariableDeclaration),
+            ("parses_explicit_cast_expression", ParsesExplicitCastExpression),
+            ("keeps_parenthesized_expression_distinct_from_cast", KeepsParenthesizedExpressionDistinctFromCast)
+        ];
+    }
+
+    private static void RespectsBinaryPrecedence()
+    {
+        const string source = "value = 1 + 2 * 3;";
+        var parser = new Frontend.Compiler.Parser.Parser(source);
+        var unit = parser.ParseCompilationUnit();
+
+        TestAssertions.False(parser.Diagnostics.HasErrors, "Parser emitted diagnostics for valid expression.");
+        TestAssertions.Equal(1, unit.Statements.Count);
+
+        var declaration = unit.Statements[0] as VariableDeclarationStatementSyntax;
+        TestAssertions.True(declaration is not null, "Expected variable declaration statement.");
+
+        var binary = declaration!.Initializer as BinaryExpressionSyntax;
+        TestAssertions.True(binary is not null, "Expected binary expression initializer.");
+        TestAssertions.Equal(Frontend.Compiler.Lexer.TokenKind.PlusToken, binary!.OperatorKind);
+        TestAssertions.True(binary.Right is BinaryExpressionSyntax, "Expected multiplication on right side of +.");
+    }
+
+    private static void RecoversAfterMissingSemicolon()
+    {
+        const string source = "flux x = 1\nflux y = 2;";
+        var parser = new Frontend.Compiler.Parser.Parser(source);
+        var unit = parser.ParseCompilationUnit();
+
+        TestAssertions.True(parser.Diagnostics.HasErrors, "Expected parser diagnostics for missing semicolon.");
+        TestAssertions.Equal(2, unit.Statements.Count, "Parser should recover and parse second declaration.");
+    }
+
+    private static void ParsesTypeDeclarations()
+    {
+        const string source = "struct Pair<T> [T left, T right]; enum Option<T> => Some(T), None; class Person [string name];";
+        var parser = new Frontend.Compiler.Parser.Parser(source);
+        var unit = parser.ParseCompilationUnit();
+
+        TestAssertions.False(parser.Diagnostics.HasErrors, "Expected type declarations to parse without diagnostics.");
+        TestAssertions.Equal(3, unit.Statements.Count);
+        TestAssertions.True(unit.Statements[0] is StructDeclarationStatementSyntax, "Expected struct declaration.");
+        TestAssertions.True(unit.Statements[1] is EnumDeclarationStatementSyntax, "Expected enum declaration.");
+        TestAssertions.True(unit.Statements[2] is ClassDeclarationStatementSyntax, "Expected class declaration.");
+    }
+
+    private static void ParsesTypedVariableDeclaration()
+    {
+        const string source = "int value = 42;";
+        var parser = new Frontend.Compiler.Parser.Parser(source);
+        var unit = parser.ParseCompilationUnit();
+
+        TestAssertions.False(parser.Diagnostics.HasErrors);
+        var declaration = unit.Statements[0] as VariableDeclarationStatementSyntax;
+        TestAssertions.True(declaration is not null, "Expected typed variable declaration.");
+        TestAssertions.True(declaration!.DeclaredType is not null, "Expected declared type to be captured.");
+        TestAssertions.Equal("int", declaration.DeclaredType!.Name);
+    }
+
+    private static void ParsesExplicitCastExpression()
+    {
+        const string source = "result = (int)3.5 + 1;";
+        var parser = new Frontend.Compiler.Parser.Parser(source);
+        var unit = parser.ParseCompilationUnit();
+
+        TestAssertions.False(parser.Diagnostics.HasErrors);
+        var declaration = unit.Statements[0] as VariableDeclarationStatementSyntax;
+        TestAssertions.True(declaration is not null, "Expected variable declaration statement.");
+
+        var binary = declaration!.Initializer as BinaryExpressionSyntax;
+        TestAssertions.True(binary is not null, "Expected binary expression.");
+        TestAssertions.True(binary!.Left is CastExpressionSyntax, "Expected left operand to be cast expression.");
+
+        var cast = (CastExpressionSyntax)binary.Left;
+        TestAssertions.Equal("int", cast.TargetType.Name);
+    }
+
+    private static void KeepsParenthesizedExpressionDistinctFromCast()
+    {
+        const string source = "value = (1 + 2);";
+        var parser = new Frontend.Compiler.Parser.Parser(source);
+        var unit = parser.ParseCompilationUnit();
+
+        TestAssertions.False(parser.Diagnostics.HasErrors);
+        var declaration = unit.Statements[0] as VariableDeclarationStatementSyntax;
+        TestAssertions.True(declaration is not null, "Expected variable declaration.");
+        TestAssertions.True(declaration!.Initializer is ParenthesizedExpressionSyntax, "Expected parenthesized expression, not cast.");
+    }
+}
