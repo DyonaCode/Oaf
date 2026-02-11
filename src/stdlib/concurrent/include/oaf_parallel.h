@@ -1,5 +1,5 @@
-#ifndef OAFLANG_STDLIB_PARALLEL_H
-#define OAFLANG_STDLIB_PARALLEL_H
+#ifndef OAF_STDLIB_PARALLEL_H
+#define OAF_STDLIB_PARALLEL_H
 
 #include <stddef.h>
 #include <stdint.h>

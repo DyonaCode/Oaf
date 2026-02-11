@@ -1,5 +1,5 @@
-#ifndef OAFLANG_INTERFACE_DISPATCH_H
-#define OAFLANG_INTERFACE_DISPATCH_H
+#ifndef OAF_INTERFACE_DISPATCH_H
+#define OAF_INTERFACE_DISPATCH_H
 
 #include <stddef.h>
 #include "type_info.h"

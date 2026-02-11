@@ -1,5 +1,5 @@
-#ifndef OAFLANG_STDLIB_DICT_H
-#define OAFLANG_STDLIB_DICT_H
+#ifndef OAF_STDLIB_DICT_H
+#define OAF_STDLIB_DICT_H
 
 #include <stddef.h>
 #include "allocator.h"

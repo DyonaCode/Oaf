@@ -1,5 +1,5 @@
-#ifndef OAFLANG_REFLECTION_H
-#define OAFLANG_REFLECTION_H
+#ifndef OAF_REFLECTION_H
+#define OAF_REFLECTION_H
 
 #include <stddef.h>
 #include "type_info.h"

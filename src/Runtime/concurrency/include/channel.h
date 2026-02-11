@@ -1,5 +1,5 @@
-#ifndef OAFLANG_CHANNEL_H
-#define OAFLANG_CHANNEL_H
+#ifndef OAF_CHANNEL_H
+#define OAF_CHANNEL_H
 
 #include <stddef.h>
 #include "sync_primitives.h"

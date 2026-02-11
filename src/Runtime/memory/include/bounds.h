@@ -1,5 +1,5 @@
-#ifndef OAFLANG_BOUNDS_H
-#define OAFLANG_BOUNDS_H
+#ifndef OAF_BOUNDS_H
+#define OAF_BOUNDS_H
 
 #include <stddef.h>
 

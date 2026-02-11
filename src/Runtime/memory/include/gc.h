@@ -1,5 +1,5 @@
-#ifndef OAFLANG_GC_H
-#define OAFLANG_GC_H
+#ifndef OAF_GC_H
+#define OAF_GC_H
 
 #include <stddef.h>
 #include "allocator.h"

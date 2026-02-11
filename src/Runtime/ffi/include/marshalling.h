@@ -1,5 +1,5 @@
-#ifndef OAFLANG_MARSHALLING_H
-#define OAFLANG_MARSHALLING_H
+#ifndef OAF_MARSHALLING_H
+#define OAF_MARSHALLING_H
 
 #include <stdbool.h>
 #include <stdint.h>

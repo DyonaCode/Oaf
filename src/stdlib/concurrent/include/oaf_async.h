@@ -1,5 +1,5 @@
-#ifndef OAFLANG_STDLIB_ASYNC_H
-#define OAFLANG_STDLIB_ASYNC_H
+#ifndef OAF_STDLIB_ASYNC_H
+#define OAF_STDLIB_ASYNC_H
 
 #include "sync_primitives.h"
 #include "oaf_thread_pool.h"

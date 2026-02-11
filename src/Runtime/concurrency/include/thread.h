@@ -1,5 +1,5 @@
-#ifndef OAFLANG_THREAD_H
-#define OAFLANG_THREAD_H
+#ifndef OAF_THREAD_H
+#define OAF_THREAD_H
 
 #include <stdint.h>
 

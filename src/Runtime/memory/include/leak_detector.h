@@ -1,5 +1,5 @@
-#ifndef OAFLANG_LEAK_DETECTOR_H
-#define OAFLANG_LEAK_DETECTOR_H
+#ifndef OAF_LEAK_DETECTOR_H
+#define OAF_LEAK_DETECTOR_H
 
 #include <stddef.h>
 

@@ -1,5 +1,5 @@
-#ifndef OAFLANG_POOL_ALLOCATOR_H
-#define OAFLANG_POOL_ALLOCATOR_H
+#ifndef OAF_POOL_ALLOCATOR_H
+#define OAF_POOL_ALLOCATOR_H
 
 #include <stddef.h>
 #include "allocator.h"

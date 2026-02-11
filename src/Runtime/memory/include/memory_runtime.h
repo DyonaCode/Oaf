@@ -1,5 +1,5 @@
-#ifndef OAFLANG_MEMORY_RUNTIME_H
-#define OAFLANG_MEMORY_RUNTIME_H
+#ifndef OAF_MEMORY_RUNTIME_H
+#define OAF_MEMORY_RUNTIME_H
 
 #include "allocator.h"
 #include "default_allocator.h"

@@ -1,5 +1,5 @@
-#ifndef OAFLANG_STACK_TRACE_H
-#define OAFLANG_STACK_TRACE_H
+#ifndef OAF_STACK_TRACE_H
+#define OAF_STACK_TRACE_H
 
 #include <stddef.h>
 #include "source_location.h"

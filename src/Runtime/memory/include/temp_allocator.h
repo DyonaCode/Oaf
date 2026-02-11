@@ -1,5 +1,5 @@
-#ifndef OAFLANG_TEMP_ALLOCATOR_H
-#define OAFLANG_TEMP_ALLOCATOR_H
+#ifndef OAF_TEMP_ALLOCATOR_H
+#define OAF_TEMP_ALLOCATOR_H
 
 #include <stddef.h>
 #include "allocator.h"

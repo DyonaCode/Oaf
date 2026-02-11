@@ -1,5 +1,5 @@
-#ifndef OAFLANG_CONCURRENCY_RUNTIME_H
-#define OAFLANG_CONCURRENCY_RUNTIME_H
+#ifndef OAF_CONCURRENCY_RUNTIME_H
+#define OAF_CONCURRENCY_RUNTIME_H
 
 #include "thread.h"
 #include "scheduler.h"
