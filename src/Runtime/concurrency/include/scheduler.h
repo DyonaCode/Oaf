@@ -1,5 +1,5 @@
-#ifndef OAFLANG_SCHEDULER_H
-#define OAFLANG_SCHEDULER_H
+#ifndef OAF_SCHEDULER_H
+#define OAF_SCHEDULER_H
 
 #include <stddef.h>
 #include <stdint.h>

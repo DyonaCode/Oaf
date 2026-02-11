@@ -1,5 +1,5 @@
-#ifndef OAFLANG_TYPE_INFO_H
-#define OAFLANG_TYPE_INFO_H
+#ifndef OAF_TYPE_INFO_H
+#define OAF_TYPE_INFO_H
 
 #include <stddef.h>
 

@@ -1,5 +1,5 @@
-#ifndef OAFLANG_RUNTIME_H
-#define OAFLANG_RUNTIME_H
+#ifndef OAF_RUNTIME_H
+#define OAF_RUNTIME_H
 
 #include <stddef.h>
 #include "context.h"

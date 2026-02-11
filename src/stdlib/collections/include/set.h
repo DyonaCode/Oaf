@@ -1,5 +1,5 @@
-#ifndef OAFLANG_STDLIB_SET_H
-#define OAFLANG_STDLIB_SET_H
+#ifndef OAF_STDLIB_SET_H
+#define OAF_STDLIB_SET_H
 
 #include <stddef.h>
 #include "dict.h"

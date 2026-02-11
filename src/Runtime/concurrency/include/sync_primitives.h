@@ -1,5 +1,5 @@
-#ifndef OAFLANG_SYNC_PRIMITIVES_H
-#define OAFLANG_SYNC_PRIMITIVES_H
+#ifndef OAF_SYNC_PRIMITIVES_H
+#define OAF_SYNC_PRIMITIVES_H
 
 #include <pthread.h>
 

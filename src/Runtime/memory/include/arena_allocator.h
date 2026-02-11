@@ -1,5 +1,5 @@
-#ifndef OAFLANG_ARENA_ALLOCATOR_H
-#define OAFLANG_ARENA_ALLOCATOR_H
+#ifndef OAF_ARENA_ALLOCATOR_H
+#define OAF_ARENA_ALLOCATOR_H
 
 #include <stddef.h>
 #include "allocator.h"

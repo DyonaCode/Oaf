@@ -1,5 +1,5 @@
-#ifndef OAFLANG_FFI_SUPPORT_H
-#define OAFLANG_FFI_SUPPORT_H
+#ifndef OAF_FFI_SUPPORT_H
+#define OAF_FFI_SUPPORT_H
 
 #include "foreign_types.h"
 #include "marshalling.h"

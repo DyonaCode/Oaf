@@ -1,5 +1,5 @@
-#ifndef OAFLANG_STDLIB_LIST_H
-#define OAFLANG_STDLIB_LIST_H
+#ifndef OAF_STDLIB_LIST_H
+#define OAF_STDLIB_LIST_H
 
 #include <stddef.h>
 #include "array.h"

@@ -1,5 +1,5 @@
-#ifndef OAFLANG_SOURCE_LOCATION_H
-#define OAFLANG_SOURCE_LOCATION_H
+#ifndef OAF_SOURCE_LOCATION_H
+#define OAF_SOURCE_LOCATION_H
 
 #include <stdint.h>
 

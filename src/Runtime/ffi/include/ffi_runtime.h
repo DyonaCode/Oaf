@@ -1,5 +1,5 @@
-#ifndef OAFLANG_FFI_RUNTIME_H
-#define OAFLANG_FFI_RUNTIME_H
+#ifndef OAF_FFI_RUNTIME_H
+#define OAF_FFI_RUNTIME_H
 
 #include <stddef.h>
 #include "marshalling.h"

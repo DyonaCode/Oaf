@@ -1,5 +1,5 @@
-#ifndef OAFLANG_FOREIGN_TYPES_H
-#define OAFLANG_FOREIGN_TYPES_H
+#ifndef OAF_FOREIGN_TYPES_H
+#define OAF_FOREIGN_TYPES_H
 
 #include <stddef.h>
 

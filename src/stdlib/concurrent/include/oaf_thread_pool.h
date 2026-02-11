@@ -1,5 +1,5 @@
-#ifndef OAFLANG_STDLIB_THREAD_POOL_H
-#define OAFLANG_STDLIB_THREAD_POOL_H
+#ifndef OAF_STDLIB_THREAD_POOL_H
+#define OAF_STDLIB_THREAD_POOL_H
 
 #include <stddef.h>
 #include <pthread.h>

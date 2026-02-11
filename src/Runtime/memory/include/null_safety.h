@@ -1,5 +1,5 @@
-#ifndef OAFLANG_NULL_SAFETY_H
-#define OAFLANG_NULL_SAFETY_H
+#ifndef OAF_NULL_SAFETY_H
+#define OAF_NULL_SAFETY_H
 
 #ifdef __cplusplus
 extern "C" {

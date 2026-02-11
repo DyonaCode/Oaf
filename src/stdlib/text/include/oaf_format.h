@@ -1,5 +1,5 @@
-#ifndef OAFLANG_STDLIB_FORMAT_H
-#define OAFLANG_STDLIB_FORMAT_H
+#ifndef OAF_STDLIB_FORMAT_H
+#define OAF_STDLIB_FORMAT_H
 
 #include <stdarg.h>
 #include "oaf_string.h"

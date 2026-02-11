@@ -1,5 +1,5 @@
-#ifndef OAFLANG_LIFETIME_H
-#define OAFLANG_LIFETIME_H
+#ifndef OAF_LIFETIME_H
+#define OAF_LIFETIME_H
 
 #include <stdbool.h>
 #include <stdint.h>

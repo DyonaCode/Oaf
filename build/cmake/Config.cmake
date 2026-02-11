@@ -1,4 +1,4 @@
-set(OAFLANG_RUNTIME_SOURCES
+set(OAF_RUNTIME_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/../../src/Runtime/core/src/runtime_stub.c
     ${CMAKE_CURRENT_LIST_DIR}/../../src/Runtime/core/src/context.c
     ${CMAKE_CURRENT_LIST_DIR}/../../src/Runtime/core/src/bootstrap.c
@@ -43,7 +43,7 @@ set(OAFLANG_RUNTIME_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/../../src/stdlib/serialization/serializer.c
 )
 
-add_library(oaf_runtime STATIC ${OAFLANG_RUNTIME_SOURCES})
+add_library(oaf_runtime STATIC ${OAF_RUNTIME_SOURCES})
 
 target_include_directories(
     oaf_runtime
@@ -73,7 +73,7 @@ if(PKG_CONFIG_FOUND)
 endif()
 
 if(LIBFFI_FOUND)
-    target_compile_definitions(oaf_runtime PUBLIC OAFLANG_HAVE_LIBFFI=1)
+    target_compile_definitions(oaf_runtime PUBLIC OAF_HAVE_LIBFFI=1)
     target_include_directories(oaf_runtime PUBLIC ${LIBFFI_INCLUDE_DIRS})
     target_link_libraries(oaf_runtime PUBLIC ${LIBFFI_LIBRARIES})
 endif()

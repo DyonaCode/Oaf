@@ -1,5 +1,5 @@
-#ifndef OAFLANG_ATOMIC_OPS_H
-#define OAFLANG_ATOMIC_OPS_H
+#ifndef OAF_ATOMIC_OPS_H
+#define OAF_ATOMIC_OPS_H
 
 #include <stdint.h>
 #include <stdatomic.h>

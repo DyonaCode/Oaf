@@ -1,5 +1,5 @@
-#ifndef OAFLANG_CONTEXT_H
-#define OAFLANG_CONTEXT_H
+#ifndef OAF_CONTEXT_H
+#define OAF_CONTEXT_H
 
 #include "allocator.h"
 #include "temp_allocator.h"

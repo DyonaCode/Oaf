@@ -1,5 +1,5 @@
-#ifndef OAFLANG_STDLIB_STREAM_H
-#define OAFLANG_STDLIB_STREAM_H
+#ifndef OAF_STDLIB_STREAM_H
+#define OAF_STDLIB_STREAM_H
 
 #include <stddef.h>
 

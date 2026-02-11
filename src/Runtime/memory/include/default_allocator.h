@@ -1,5 +1,5 @@
-#ifndef OAFLANG_DEFAULT_ALLOCATOR_H
-#define OAFLANG_DEFAULT_ALLOCATOR_H
+#ifndef OAF_DEFAULT_ALLOCATOR_H
+#define OAF_DEFAULT_ALLOCATOR_H
 
 #include <stddef.h>
 #include "allocator.h"

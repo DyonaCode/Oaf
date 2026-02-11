@@ -5,7 +5,7 @@
 #include <dlfcn.h>
 #include "ffi_runtime.h"
 
-#ifdef OAFLANG_HAVE_LIBFFI
+#ifdef OAF_HAVE_LIBFFI
 #include <ffi.h>
 #endif
 
@@ -103,7 +103,7 @@ void* oaf_ffi_library_symbol(const OafFfiLibrary* library, const char* symbol_na
     return dlsym(library->handle, symbol_name);
 }
 
-#ifdef OAFLANG_HAVE_LIBFFI
+#ifdef OAF_HAVE_LIBFFI
 static ffi_type* ffi_type_for(OafForeignTypeKind type)
 {
     switch (type)
@@ -278,7 +278,7 @@ OafFfiCallStatus oaf_ffi_call_address(
         return OAF_FFI_CALL_INVALID_ARGUMENT;
     }
 
-#ifdef OAFLANG_HAVE_LIBFFI
+#ifdef OAF_HAVE_LIBFFI
     {
         ffi_cif cif;
         ffi_type* arg_types[OAF_FFI_MAX_ARGS];

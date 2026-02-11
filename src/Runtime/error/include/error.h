@@ -1,5 +1,5 @@
-#ifndef OAFLANG_ERROR_H
-#define OAFLANG_ERROR_H
+#ifndef OAF_ERROR_H
+#define OAF_ERROR_H
 
 #include <stddef.h>
 #include "source_location.h"

@@ -1,5 +1,5 @@
-#ifndef OAFLANG_CALLBACK_REGISTRY_H
-#define OAFLANG_CALLBACK_REGISTRY_H
+#ifndef OAF_CALLBACK_REGISTRY_H
+#define OAF_CALLBACK_REGISTRY_H
 
 #include <stddef.h>
 #include <stdint.h>

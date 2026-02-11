@@ -1,5 +1,5 @@
-#ifndef OAFLANG_OWNERSHIP_H
-#define OAFLANG_OWNERSHIP_H
+#ifndef OAF_OWNERSHIP_H
+#define OAF_OWNERSHIP_H
 
 #include <stdbool.h>
 #include <stdint.h>
