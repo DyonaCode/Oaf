@@ -5,6 +5,7 @@ using Oaf.Frontend.Compiler.CodeGen.Bytecode;
 using Oaf.Frontend.Compiler.Diagnostics;
 using Oaf.Frontend.Compiler.Driver;
 using Oaf.Tests.Framework;
+using Oaf.Tooling.Benchmarking;
 using Oaf.Tooling.Documentation;
 using Oaf.Tooling.Formatting;
 using Oaf.Tooling.PackageManagement;
@@ -20,7 +21,10 @@ public static class CompilerIntegrationTests
             ("compiles_and_executes_end_to_end_program", CompilesAndExecutesEndToEndProgram),
             ("compilation_pipeline_reports_type_errors_with_location", CompilationPipelineReportsTypeErrorsWithLocation),
             ("tooling_pipeline_generates_docs_and_installs_packages", ToolingPipelineGeneratesDocsAndInstallsPackages),
-            ("package_prelude_can_be_composed_into_compilation", PackagePreludeCanBeComposedIntoCompilation)
+            ("package_prelude_can_be_composed_into_compilation", PackagePreludeCanBeComposedIntoCompilation),
+            ("bytecode_and_mlir_targets_produce_identical_vm_results", BytecodeAndMlirTargetsProduceIdenticalVmResults),
+            ("vm_and_native_runtimes_produce_identical_results", VmAndNativeRuntimesProduceIdenticalResults),
+            ("mlir_target_vm_and_native_runtimes_produce_identical_results", MlirTargetVmAndNativeRuntimesProduceIdenticalResults)
         ];
     }
 
@@ -180,5 +184,108 @@ public static class CompilerIntegrationTests
     {
         var hash = SHA256.HashData(File.ReadAllBytes(filePath));
         return Convert.ToHexString(hash).ToLowerInvariant();
+    }
+
+    private static void BytecodeAndMlirTargetsProduceIdenticalVmResults()
+    {
+        const string source = """
+            flux i = 1;
+            flux acc = 0;
+            loop i <= 250 => {
+                if (i % 3) == 0 => {
+                    acc += i * 2;
+                } -> {
+                    acc += i;
+                }
+                i += 1;
+            }
+            return acc;
+            """;
+
+        var driver = new CompilerDriver(enableCompilationCache: false);
+        var bytecodeResult = driver.CompileSource(source, CompilerCompilationTarget.Bytecode);
+        var mlirResult = driver.CompileSource(source, CompilerCompilationTarget.Mlir);
+
+        TestAssertions.True(bytecodeResult.Success, "Expected bytecode target compilation to succeed.");
+        TestAssertions.True(mlirResult.Success, "Expected MLIR target compilation to succeed.");
+
+        var vm = new BytecodeVirtualMachine();
+        var bytecodeExecution = vm.Execute(bytecodeResult.BytecodeProgram);
+        var mlirExecution = vm.Execute(mlirResult.BytecodeProgram);
+
+        TestAssertions.True(bytecodeExecution.Success, bytecodeExecution.ErrorMessage);
+        TestAssertions.True(mlirExecution.Success, mlirExecution.ErrorMessage);
+        TestAssertions.Equal(
+            Convert.ToInt64(bytecodeExecution.ReturnValue),
+            Convert.ToInt64(mlirExecution.ReturnValue),
+            "Expected bytecode and MLIR targets to produce identical VM results.");
+    }
+
+    private static void VmAndNativeRuntimesProduceIdenticalResults()
+    {
+        if (!OafNativeKernelExecutor.IsNativeCompilerAvailable())
+        {
+            return;
+        }
+
+        const string source = """
+            flux i = 1;
+            flux acc = 0;
+            loop i <= 1000 => {
+                acc = acc ^ ((i * 31) + (i % 7));
+                i += 1;
+            }
+            return acc;
+            """;
+
+        var driver = new CompilerDriver(enableCompilationCache: false);
+        var compilation = driver.CompileSource(source, CompilerCompilationTarget.Bytecode);
+        TestAssertions.True(compilation.Success, "Expected compilation to succeed.");
+
+        var vm = new BytecodeVirtualMachine();
+        var vmExecution = vm.Execute(compilation.BytecodeProgram);
+        TestAssertions.True(vmExecution.Success, vmExecution.ErrorMessage);
+
+        using var nativeHandle = OafNativeKernelExecutor.CreateHandle(compilation.BytecodeProgram);
+        var nativeValue = nativeHandle.ExecuteOnce();
+
+        TestAssertions.Equal(
+            Convert.ToInt64(vmExecution.ReturnValue),
+            Convert.ToInt64(nativeValue),
+            "Expected VM and native executions to produce identical results.");
+    }
+
+    private static void MlirTargetVmAndNativeRuntimesProduceIdenticalResults()
+    {
+        if (!OafNativeKernelExecutor.IsNativeCompilerAvailable())
+        {
+            return;
+        }
+
+        const string source = """
+            flux i = 1;
+            flux acc = 1;
+            loop i <= 500 => {
+                acc += (i * 13) ^ (acc % 11);
+                i += 1;
+            }
+            return acc;
+            """;
+
+        var driver = new CompilerDriver(enableCompilationCache: false);
+        var compilation = driver.CompileSource(source, CompilerCompilationTarget.Mlir);
+        TestAssertions.True(compilation.Success, "Expected MLIR target compilation to succeed.");
+
+        var vm = new BytecodeVirtualMachine();
+        var vmExecution = vm.Execute(compilation.BytecodeProgram);
+        TestAssertions.True(vmExecution.Success, vmExecution.ErrorMessage);
+
+        using var nativeHandle = OafNativeKernelExecutor.CreateHandle(compilation.BytecodeProgram);
+        var nativeValue = nativeHandle.ExecuteOnce();
+
+        TestAssertions.Equal(
+            Convert.ToInt64(vmExecution.ReturnValue),
+            Convert.ToInt64(nativeValue),
+            "Expected MLIR-targeted VM and native executions to produce identical results.");
     }
 }

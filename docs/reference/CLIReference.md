@@ -10,11 +10,15 @@
   List installed versions and show the active one.
 - `oaf version <version>`
   Switch the active local version.
-- `oaf run <file-or-source> [-r vm|native]`
+- `oaf new [path] [--force]`
+  Create a project scaffold (main file, tests, examples, manifest, README).
+- `oaf test [path] [-r vm|native] [--compilation-target bytecode|mlir]`
+  Discover `.oaf` files in `tests/` + `examples/` (or an explicit file/directory), compile, and execute them.
+- `oaf run <file-or-source> [-r vm|native] [--compilation-target bytecode|mlir]`
   Compile and execute source.
-- `oaf build <file-or-source> [-o <output-path>] [-r vm|native]`
-  Build artifacts (default flow: bytecode artifact).
-- `oaf publish <file-or-source> [-o <output-path>] [-r native]`
+- `oaf build <file-or-source> [-o <output-path>] [-r vm|native] [--compilation-target bytecode|mlir]`
+  Build artifacts (default flow: bytecode/native artifacts; MLIR target uses the same output formats).
+- `oaf publish <file-or-source> [-o <output-path>] [-r native] [--compilation-target bytecode|mlir]`
   Publish native executable output.
 - `oaf clean [-o <path>]`
   Remove build output.
@@ -24,6 +28,9 @@
 Useful examples:
 
 ```bash
+oaf new my-app
+oaf test
+oaf test ./examples --compilation-target mlir
 oaf run ./examples/basics/01_hello_and_return.oaf -r vm
 oaf build ./examples/basics/01_hello_and_return.oaf -o ./out/oaf
 oaf publish ./examples/applications/01_sum_accumulator.oaf -o ./out/oaf-publish
@@ -35,7 +42,14 @@ Optional inspection flags for compile/run commands:
 - `--ast`
 - `--ir`
 - `--bytecode`
+- `--mlir`
+- `--compilation-target bytecode|mlir`
 - `--run-bytecode`
+
+Notes:
+
+- `--compilation-target mlir` currently uses an internal MLIR lowering stage and still emits the same runnable bytecode/native outputs as `bytecode`.
+- `oaf test` verifies packages only when a `packages.lock` is present next to the nearest `packages.txt`.
 
 ## Package Manager
 
@@ -91,8 +105,14 @@ Source-backed installs:
 Run benchmark suite:
 
 ```bash
-oaf --benchmark 200 --max-mean-ratio 5.0 --fail-on-regression
+oaf --benchmark 200 --comparison-statistic mean --max-ratio 5.0 --fail-on-regression
+oaf --benchmark 200 --comparison-statistic p95 --max-ratio 3.0 --max-ratio-for lexer=5.0 --fail-on-regression
 ```
+
+Notes:
+- `--comparison-statistic` accepts `mean`, `median`, or `p95`.
+- `--max-ratio-for` can be repeated to override thresholds per benchmark.
+- `--max-mean-ratio` remains supported as a legacy alias for `--max-ratio`.
 
 Run kernel benchmarks:
 
@@ -100,10 +120,11 @@ Run kernel benchmarks:
 oaf --benchmark-kernels --iterations 5 --sum-n 5000000 --prime-n 30000 --matrix-n 48
 oaf --benchmark-kernels --native --iterations 5 --sum-n 5000000 --prime-n 30000 --matrix-n 48
 oaf --benchmark-kernels --tiered --iterations 5 --sum-n 5000000 --prime-n 30000 --matrix-n 48
+oaf --benchmark-kernels --compilation-target mlir --iterations 5 --sum-n 5000000 --prime-n 30000 --matrix-n 48
 ```
 
 Native comparison script:
 
 ```bash
-./scripts/benchmark/run_c_rust_benchmarks.sh --iterations 5 --oaf-mode both --oaf-cli oaf
+./scripts/benchmark/run_c_rust_benchmarks.sh --iterations 5 --oaf-mode all --oaf-cli oaf
 ```

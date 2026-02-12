@@ -28,7 +28,8 @@ public static class OafKernelBenchmarkRunner
         long sumN,
         int primeN,
         int matrixN,
-        OafKernelExecutionMode executionMode = OafKernelExecutionMode.BytecodeVm)
+        OafKernelExecutionMode executionMode = OafKernelExecutionMode.BytecodeVm,
+        CompilerCompilationTarget compilationTarget = CompilerCompilationTarget.Bytecode)
     {
         if (iterations <= 0)
         {
@@ -43,12 +44,12 @@ public static class OafKernelBenchmarkRunner
         var driver = new CompilerDriver(enableCompilationCache: false);
         var results = new List<OafKernelBenchmarkResult>(capacity: 6);
 
-        results.Add(RunAlgorithm(driver, "sum_xor", BuildSumXorSource(sumN), iterations, executionMode));
-        results.Add(RunAlgorithm(driver, "prime_trial", BuildPrimeTrialSource(primeN), iterations, executionMode));
-        results.Add(RunAlgorithm(driver, "affine_grid", BuildAffineGridSource(matrixN), iterations, executionMode));
-        results.Add(RunAlgorithm(driver, "branch_mix", BuildBranchMixSource(sumN), iterations, executionMode));
-        results.Add(RunAlgorithm(driver, "gcd_fold", BuildGcdFoldSource(primeN), iterations, executionMode));
-        results.Add(RunAlgorithm(driver, "lcg_stream", BuildLcgStreamSource(sumN), iterations, executionMode));
+        results.Add(RunAlgorithm(driver, "sum_xor", BuildSumXorSource(sumN), iterations, executionMode, compilationTarget));
+        results.Add(RunAlgorithm(driver, "prime_trial", BuildPrimeTrialSource(primeN), iterations, executionMode, compilationTarget));
+        results.Add(RunAlgorithm(driver, "affine_grid", BuildAffineGridSource(matrixN), iterations, executionMode, compilationTarget));
+        results.Add(RunAlgorithm(driver, "branch_mix", BuildBranchMixSource(sumN), iterations, executionMode, compilationTarget));
+        results.Add(RunAlgorithm(driver, "gcd_fold", BuildGcdFoldSource(primeN), iterations, executionMode, compilationTarget));
+        results.Add(RunAlgorithm(driver, "lcg_stream", BuildLcgStreamSource(sumN), iterations, executionMode, compilationTarget));
 
         return results;
     }
@@ -69,9 +70,10 @@ public static class OafKernelBenchmarkRunner
         string algorithm,
         string source,
         int iterations,
-        OafKernelExecutionMode executionMode)
+        OafKernelExecutionMode executionMode,
+        CompilerCompilationTarget compilationTarget)
     {
-        var compilation = driver.CompileSource(source);
+        var compilation = driver.CompileSource(source, compilationTarget);
         if (!compilation.Success)
         {
             var diagnostics = string.Join(Environment.NewLine, compilation.Diagnostics.Select(static d => d.ToString()));
