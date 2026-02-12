@@ -21,9 +21,11 @@ public static class KernelBenchmarkTests
             primeN: 1000,
             matrixN: 12);
 
-        TestAssertions.Equal(3, results.Count);
+        TestAssertions.Equal(6, results.Count);
         var algorithms = results.Select(static result => result.Algorithm).OrderBy(static value => value, StringComparer.Ordinal).ToArray();
-        TestAssertions.SequenceEqual(["affine_grid", "prime_trial", "sum_xor"], algorithms);
+        TestAssertions.SequenceEqual(
+            ["affine_grid", "branch_mix", "gcd_fold", "lcg_stream", "prime_trial", "sum_xor"],
+            algorithms);
 
         foreach (var result in results)
         {

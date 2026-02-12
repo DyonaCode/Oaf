@@ -15,6 +15,9 @@ The suite currently includes:
 1. `sum_xor`: integer arithmetic + loop throughput
 2. `prime_trial`: trial-division prime counting
 3. `affine_grid`: O(n^3) arithmetic-heavy nested loops
+4. `branch_mix`: branch-heavy bitwise/arithmetic control flow
+5. `gcd_fold`: modulo-heavy Euclidean reduction workload
+6. `lcg_stream`: dependency-chain pseudo-random recurrence
 
 ## Quick Run
 

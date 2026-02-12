@@ -65,7 +65,7 @@ For direct Oaf vs C vs Rust algorithm comparisons, run:
 ./scripts/benchmark/run_c_rust_benchmarks.sh --oaf-mode tiered
 ```
 
-This runs identical kernels in all three languages (`sum_xor`, `prime_trial`, `affine_grid`) and writes a combined CSV under `benchmarks/results/`.
+This runs identical kernels in all three languages (`sum_xor`, `prime_trial`, `affine_grid`, `branch_mix`, `gcd_fold`, `lcg_stream`) and writes a combined CSV under `benchmarks/results/`.
 
 To run Oaf kernels only:
 
