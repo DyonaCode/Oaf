@@ -59,12 +59,12 @@ if (TryHandleToolingCommand(args, out var toolingExitCode))
 }
 
 var sourceArg = args[0];
-var source = File.Exists(sourceArg)
-    ? File.ReadAllText(sourceArg)
-    : sourceArg;
-
-var driver = new CompilerDriver();
-var result = driver.CompileSource(source);
+if (!TryCompileSdkInput(sourceArg, out var result, out var setupError))
+{
+    Console.WriteLine($"Compilation setup failed: {setupError}");
+    Environment.ExitCode = 1;
+    return;
+}
 
 PrintCompilationArtifacts(result, args);
 
@@ -129,7 +129,13 @@ static bool HandleSdkRun(string[] args, out int exitCode)
         return true;
     }
 
-    var result = CompileSdkInput(options.Input!);
+    if (!TryCompileSdkInput(options.Input!, out var result, out errorMessage))
+    {
+        Console.WriteLine(errorMessage);
+        exitCode = 1;
+        return true;
+    }
+
     PrintCompilationArtifacts(result, args);
     PrintDiagnostics(result.Diagnostics);
     if (!result.Success)
@@ -195,7 +201,13 @@ static bool HandleSdkBuild(string[] args, out int exitCode)
         return true;
     }
 
-    var result = CompileSdkInput(options.Input!);
+    if (!TryCompileSdkInput(options.Input!, out var result, out errorMessage))
+    {
+        Console.WriteLine(errorMessage);
+        exitCode = 1;
+        return true;
+    }
+
     PrintCompilationArtifacts(result, args);
     PrintDiagnostics(result.Diagnostics);
     if (!result.Success)
@@ -270,7 +282,13 @@ static bool HandleSdkPublish(string[] args, out int exitCode)
         return true;
     }
 
-    var result = CompileSdkInput(options.Input!);
+    if (!TryCompileSdkInput(options.Input!, out var result, out errorMessage))
+    {
+        Console.WriteLine(errorMessage);
+        exitCode = 1;
+        return true;
+    }
+
     PrintCompilationArtifacts(result, args);
     PrintDiagnostics(result.Diagnostics);
     if (!result.Success)
@@ -410,14 +428,27 @@ static bool HandleSdkClean(string[] args, out int exitCode)
     return true;
 }
 
-static CompilationResult CompileSdkInput(string inputArg)
+static bool TryCompileSdkInput(string inputArg, out CompilationResult result, out string? errorMessage)
 {
-    var source = File.Exists(inputArg)
+    result = null!;
+    errorMessage = null;
+
+    var isFileInput = File.Exists(inputArg);
+    var source = isFileInput
         ? File.ReadAllText(inputArg)
         : inputArg;
+    var searchDirectory = isFileInput
+        ? Path.GetDirectoryName(Path.GetFullPath(inputArg)) ?? Directory.GetCurrentDirectory()
+        : Directory.GetCurrentDirectory();
+
+    if (!OafPackageManager.TryComposeCompilationSource(source, searchDirectory, out var composedSource, out errorMessage))
+    {
+        return false;
+    }
 
     var driver = new CompilerDriver();
-    return driver.CompileSource(source);
+    result = driver.CompileSource(composedSource);
+    return true;
 }
 
 static string ResolveBuildOutputPath(string? outputOption, string inputArg, SdkRuntimeMode runtimeMode)
@@ -796,6 +827,11 @@ static void PrintUsage()
     Console.WriteLine("  oaf --pkg-add <name@version> [manifestPath]");
     Console.WriteLine("  oaf --pkg-remove <name> [manifestPath]");
     Console.WriteLine("  oaf --pkg-install [manifestPath]");
+    Console.WriteLine("  oaf --pkg-verify [manifestPath]");
+    Console.WriteLine("  oaf add [package] <name@version> [manifestPath]");
+    Console.WriteLine("  oaf remove [package] <name> [manifestPath]");
+    Console.WriteLine("  oaf restore [manifestPath]");
+    Console.WriteLine("  oaf verify [manifestPath]");
     Console.WriteLine("  oaf --gen-docs <file-or-directory> [--out <outputPath>]");
     Console.WriteLine("  oaf --format <file-or-source> [--check] [--write]");
     Console.WriteLine("  oaf --benchmark [iterations] [--max-mean-ratio <value>] [--fail-on-regression]");
@@ -812,6 +848,7 @@ static bool TryHandleToolingCommand(string[] args, out int exitCode)
         return false;
     }
 
+    args = NormalizePackageCommandAliases(args);
     var command = args[0];
     switch (command)
     {
@@ -860,6 +897,15 @@ static bool TryHandleToolingCommand(string[] args, out int exitCode)
         {
             var manifestPath = args.Length > 1 ? args[1] : OafPackageManager.DefaultManifestFileName;
             var success = OafPackageManager.Install(manifestPath, out var message);
+            Console.WriteLine(message);
+            exitCode = success ? 0 : 1;
+            return true;
+        }
+
+        case "--pkg-verify":
+        {
+            var manifestPath = args.Length > 1 ? args[1] : OafPackageManager.DefaultManifestFileName;
+            var success = OafPackageManager.VerifyInstall(manifestPath, out var message);
             Console.WriteLine(message);
             exitCode = success ? 0 : 1;
             return true;
@@ -1046,6 +1092,54 @@ static bool TryHandleToolingCommand(string[] args, out int exitCode)
         default:
             return false;
     }
+}
+
+static string[] NormalizePackageCommandAliases(string[] args)
+{
+    if (args.Length == 0)
+    {
+        return args;
+    }
+
+    var command = args[0];
+    switch (command)
+    {
+        case "add":
+            return BuildPackageAliasArgs("--pkg-add", args, supportsOptionalPackageKeyword: true);
+        case "remove":
+            return BuildPackageAliasArgs("--pkg-remove", args, supportsOptionalPackageKeyword: true);
+        case "restore":
+            return BuildPackageAliasArgs("--pkg-install", args, supportsOptionalPackageKeyword: false);
+        case "verify":
+            return BuildPackageAliasArgs("--pkg-verify", args, supportsOptionalPackageKeyword: false);
+        default:
+            return args;
+    }
+}
+
+static string[] BuildPackageAliasArgs(string targetCommand, string[] args, bool supportsOptionalPackageKeyword)
+{
+    if (args.Length == 1)
+    {
+        return [targetCommand];
+    }
+
+    var argumentStart = 1;
+    if (supportsOptionalPackageKeyword && string.Equals(args[1], "package", StringComparison.Ordinal))
+    {
+        argumentStart = 2;
+    }
+
+    var extraArguments = args.Length - argumentStart;
+    var mappedArgs = new string[Math.Max(extraArguments + 1, 1)];
+    mappedArgs[0] = targetCommand;
+    if (extraArguments <= 0)
+    {
+        return mappedArgs;
+    }
+
+    Array.Copy(args, argumentStart, mappedArgs, 1, extraArguments);
+    return mappedArgs;
 }
 
 static string? TryGetOptionValue(string[] args, string optionName)

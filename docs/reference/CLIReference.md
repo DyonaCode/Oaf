@@ -43,6 +43,37 @@ Optional inspection flags for compile/run commands:
 - `--pkg-add <name@version> [manifestPath]`
 - `--pkg-remove <name> [manifestPath]`
 - `--pkg-install [manifestPath]`
+- `--pkg-verify [manifestPath]`
+- `add [package] <name@version> [manifestPath]` (alias of `--pkg-add`)
+- `remove [package] <name> [manifestPath]` (alias of `--pkg-remove`)
+- `restore [manifestPath]` (alias of `--pkg-install`)
+- `verify [manifestPath]` (alias of `--pkg-verify`)
+
+Source-backed installs:
+
+- Optional `packages.sources` next to `packages.txt` (or `OAF_PACKAGE_INDEX` env var) points to one or more JSON package indexes.
+- Index schema:
+
+```json
+{
+  "source": "localrepo",
+  "packages": [
+    {
+      "name": "core.math",
+      "version": "1.0.0",
+      "artifact": "./core.math-1.0.0.oafpkg",
+      "sha256": "...",
+      "dependencies": ["core.runtime@^1.0.0", "core.text@>=2.0.0 <3.0.0"]
+    }
+  ]
+}
+```
+
+- `--pkg-install` verifies artifact SHA256 and extracts `.zip`/`.nupkg`/`.oafpkg` into `.oaf/packages/<name>/<version>/content`.
+- `packages.txt` selectors can be exact or ranges (`1.2.3`, `^1.2.0`, `~2.4.0`, `>=1.0.0 <2.0.0`, `1.3.*`).
+- Resolver includes transitive dependencies and fails install on version conflicts.
+- Package module files must match their content-relative module path (`content/pkg/math.oaf` must declare `module pkg.math;`).
+- `oaf run`, `oaf build`, `oaf publish`, and direct compile mode compose only explicitly imported package modules (including transitive imports) from nearest `packages.lock` and `.oaf/packages/**/content`.
 
 ## Documentation Generator
 

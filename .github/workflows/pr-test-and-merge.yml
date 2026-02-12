@@ -228,6 +228,28 @@ jobs:
             "${cli}" run "${example}"
           done < <(find "${package_root}/examples" -type f -name '*.oaf' -print0 | sort -z)
 
+      - name: Validate installer and version shim
+        run: |
+          set -euo pipefail
+          version="0.0.0-pr${{ matrix.pr_number }}"
+          archive="dist/oaf-${version}.tar.gz"
+          temp_dir="$(mktemp -d)"
+          trap 'rm -rf "${temp_dir}"' EXIT
+
+          tar -xzf "${archive}" -C "${temp_dir}"
+          package_root="${temp_dir}/oaf-${version}"
+          temp_home="${temp_dir}/home"
+          install_dir="${temp_dir}/bin"
+          oaf_home="${temp_dir}/oaf-home"
+          mkdir -p "${temp_home}"
+
+          HOME="${temp_home}" OAF_INSTALL_DIR="${install_dir}" OAF_HOME="${oaf_home}" \
+            "${package_root}/install.sh" "${version}"
+
+          env PATH="${install_dir}:${PATH}" HOME="${temp_home}" OAF_HOME="${oaf_home}" oaf --version
+          env PATH="${install_dir}:${PATH}" HOME="${temp_home}" OAF_HOME="${oaf_home}" oaf version
+          env PATH="${install_dir}:${PATH}" HOME="${temp_home}" OAF_HOME="${oaf_home}" oaf version "${version}"
+
   merge_pr:
     if: needs.discover_prs.outputs.eligible_count != '0'
     needs:
