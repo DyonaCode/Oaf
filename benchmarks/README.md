@@ -6,6 +6,10 @@ This directory provides apples-to-apples benchmark kernels implemented in:
 - C (`benchmarks/native/bench_c.c`)
 - Rust (`benchmarks/native/bench_rust.rs`)
 
+Latest CI benchmark snapshot:
+
+- `CI_BENCHMARKS.md`
+
 The suite currently includes:
 
 1. `sum_xor`: integer arithmetic + loop throughput
