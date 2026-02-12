@@ -1,0 +1,13 @@
+flux n = 2500000;
+flux i = 1;
+flux acc = 0;
+
+loop i <= n => {
+    acc += (i ^ (i >> 2)) + (i % 7);
+    if i % 97 == 0 => {
+        acc += i / 3;
+    }
+    i += 1;
+}
+
+return acc;
