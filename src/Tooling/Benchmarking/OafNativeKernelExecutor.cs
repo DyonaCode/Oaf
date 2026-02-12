@@ -275,6 +275,8 @@ public static class OafNativeKernelExecutor
         var slotCount = Math.Max(function.SlotCount, 1);
         var builder = new StringBuilder();
 
+        builder.AppendLine("#define _POSIX_C_SOURCE 200809L");
+        builder.AppendLine();
         builder.AppendLine("#include <inttypes.h>");
         builder.AppendLine("#include <math.h>");
         builder.AppendLine("#include <stdint.h>");
