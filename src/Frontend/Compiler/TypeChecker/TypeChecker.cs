@@ -221,6 +221,18 @@ public sealed class TypeChecker
         TypeReferenceSyntax typeReference,
         IReadOnlyDictionary<string, TypeSymbol>? genericScope = null)
     {
+        if (string.Equals(typeReference.Name, "array", StringComparison.Ordinal))
+        {
+            if (typeReference.TypeArguments.Count != 1)
+            {
+                ReportTypeError("Array type requires exactly one element type argument.", typeReference);
+                return PrimitiveTypeSymbol.Error;
+            }
+
+            var elementType = ResolveTypeReference(typeReference.TypeArguments[0], genericScope);
+            return new ArrayTypeSymbol(elementType);
+        }
+
         if (genericScope is not null && genericScope.TryGetValue(typeReference.Name, out var genericTypeParameter))
         {
             if (typeReference.TypeArguments.Count > 0)
@@ -288,8 +300,33 @@ public sealed class TypeChecker
                 CheckAssignment(assignment);
                 break;
 
+            case IndexedAssignmentStatementSyntax indexedAssignment:
+                CheckIndexedAssignment(indexedAssignment);
+                break;
+
+            case MatchStatementSyntax matchStatement:
+                CheckMatchStatement(matchStatement);
+                break;
+
             case ExpressionStatementSyntax expression:
                 CheckExpression(expression.Expression);
+                break;
+
+            case ThrowStatementSyntax throwStatement:
+                if (throwStatement.ErrorExpression is not null)
+                {
+                    _ = CheckExpression(throwStatement.ErrorExpression);
+                }
+
+                if (throwStatement.DetailExpression is not null)
+                {
+                    _ = CheckExpression(throwStatement.DetailExpression);
+                }
+
+                break;
+
+            case GcStatementSyntax gcStatement:
+                CheckStatement(gcStatement.Body);
                 break;
 
             case ReturnStatementSyntax returnStatement:
@@ -354,6 +391,10 @@ public sealed class TypeChecker
 
                 break;
 
+            case JotStatementSyntax jotStatement:
+                _ = CheckExpression(jotStatement.Expression);
+                break;
+
             case ModuleDeclarationStatementSyntax moduleDeclaration:
                 _currentModule = moduleDeclaration.ModuleName;
                 _importedModules.Clear();
@@ -400,6 +441,11 @@ public sealed class TypeChecker
         }
 
         Symbols.TryDeclare(new VariableSymbol(symbolName, variableType, declaration.IsMutable));
+
+        if (TryGetAggregateFields(variableType, out var fields))
+        {
+            DeclareAggregateFieldSymbols(symbolName, declaration.IsMutable, fields, declaration);
+        }
     }
 
     private void CheckAssignment(AssignmentStatementSyntax assignment)
@@ -435,12 +481,92 @@ public sealed class TypeChecker
         }
     }
 
+    private void CheckIndexedAssignment(IndexedAssignmentStatementSyntax indexedAssignment)
+    {
+        if (indexedAssignment.Target is not IndexExpressionSyntax)
+        {
+            ReportTypeError("Indexed assignment requires an index target.", indexedAssignment.Target);
+            _ = CheckExpression(indexedAssignment.Expression);
+            return;
+        }
+
+        if (TryResolveIndexedBaseVariable(indexedAssignment.Target, out var baseVariable) && !baseVariable.IsMutable)
+        {
+            ReportTypeError($"Variable '{baseVariable.Name}' is immutable and cannot be assigned.", indexedAssignment);
+        }
+
+        var targetType = CheckExpression(indexedAssignment.Target);
+        var expressionType = CheckExpression(indexedAssignment.Expression);
+
+        if (assignmentRequiresNumeric(indexedAssignment.OperatorKind))
+        {
+            if (!IsNumeric(targetType) || !IsNumeric(expressionType))
+            {
+                ReportTypeError($"Operator '{indexedAssignment.OperatorKind}' requires numeric operands.", indexedAssignment);
+            }
+
+            return;
+        }
+
+        var conversion = ClassifyConversion(expressionType, targetType, isExplicit: false);
+        if (conversion == ConversionKind.None)
+        {
+            ReportTypeError($"Cannot assign value of type '{expressionType}' to indexed target of type '{targetType}'.", indexedAssignment);
+        }
+
+        static bool assignmentRequiresNumeric(TokenKind kind)
+        {
+            return kind is TokenKind.PlusEqualsToken
+                or TokenKind.MinusEqualsToken
+                or TokenKind.StarEqualsToken
+                or TokenKind.SlashEqualsToken;
+        }
+    }
+
+    private void CheckMatchStatement(MatchStatementSyntax matchStatement)
+    {
+        var scrutineeType = CheckExpression(matchStatement.Expression);
+        var defaultCount = 0;
+
+        for (var index = 0; index < matchStatement.Arms.Count; index++)
+        {
+            var arm = matchStatement.Arms[index];
+            if (arm.Pattern is null)
+            {
+                defaultCount++;
+                CheckStatement(arm.Body);
+                continue;
+            }
+
+            var patternType = CheckExpression(arm.Pattern);
+            var comparable = IsAssignable(scrutineeType, patternType) || IsAssignable(patternType, scrutineeType);
+            if (!comparable
+                && !AreSameType(scrutineeType, PrimitiveTypeSymbol.Error)
+                && !AreSameType(patternType, PrimitiveTypeSymbol.Error))
+            {
+                ReportTypeError(
+                    $"Match arm {index + 1} pattern type '{patternType}' is not compatible with scrutinee type '{scrutineeType}'.",
+                    arm.Pattern);
+            }
+
+            CheckStatement(arm.Body);
+        }
+
+        if (defaultCount > 1)
+        {
+            ReportTypeError("Match statement can contain at most one default arm ('->').", matchStatement);
+        }
+    }
+
     private TypeSymbol CheckExpression(ExpressionSyntax expression)
     {
         return expression switch
         {
             LiteralExpressionSyntax literal => PrimitiveTypeSymbol.FromLiteral(literal.Value),
             NameExpressionSyntax name => LookupName(name),
+            ConstructorExpressionSyntax constructor => CheckConstructorExpression(constructor),
+            ArrayLiteralExpressionSyntax arrayLiteral => CheckArrayLiteralExpression(arrayLiteral),
+            IndexExpressionSyntax indexExpression => CheckIndexExpression(indexExpression),
             CastExpressionSyntax cast => CheckCastExpression(cast),
             UnaryExpressionSyntax unary => CheckUnaryExpression(unary),
             BinaryExpressionSyntax binary => CheckBinaryExpression(binary),
@@ -456,7 +582,141 @@ public sealed class TypeChecker
             return symbol.Type;
         }
 
+        if (TryResolveEnumVariantType(nameExpression.Identifier, out var enumType))
+        {
+            return enumType;
+        }
+
         ReportTypeError($"Variable '{nameExpression.Identifier}' is not declared.", nameExpression);
+        return PrimitiveTypeSymbol.Error;
+    }
+
+    private TypeSymbol CheckConstructorExpression(ConstructorExpressionSyntax constructorExpression)
+    {
+        var targetType = ResolveTypeReference(constructorExpression.TargetType);
+        if (AreSameType(targetType, PrimitiveTypeSymbol.Error))
+        {
+            foreach (var argument in constructorExpression.Arguments)
+            {
+                _ = CheckExpression(argument);
+            }
+
+            return PrimitiveTypeSymbol.Error;
+        }
+
+        if (IsOpenGenericDefinition(targetType))
+        {
+            ReportTypeError($"Type '{targetType.Name}' requires explicit type arguments.", constructorExpression.TargetType);
+            foreach (var argument in constructorExpression.Arguments)
+            {
+                _ = CheckExpression(argument);
+            }
+
+            return PrimitiveTypeSymbol.Error;
+        }
+
+        if (!TryGetAggregateFields(targetType, out var fields))
+        {
+            ReportTypeError($"Type '{targetType.Name}' cannot be constructed with '[...]' syntax.", constructorExpression);
+            foreach (var argument in constructorExpression.Arguments)
+            {
+                _ = CheckExpression(argument);
+            }
+
+            return PrimitiveTypeSymbol.Error;
+        }
+
+        if (constructorExpression.Arguments.Count != fields.Count)
+        {
+            ReportTypeError(
+                $"Type '{targetType.Name}' expects {fields.Count} constructor argument(s) but got {constructorExpression.Arguments.Count}.",
+                constructorExpression);
+        }
+
+        var sharedCount = Math.Min(constructorExpression.Arguments.Count, fields.Count);
+        for (var index = 0; index < sharedCount; index++)
+        {
+            var argumentType = CheckExpression(constructorExpression.Arguments[index]);
+            var fieldType = fields[index].Type;
+            var conversion = ClassifyConversion(argumentType, fieldType, isExplicit: false);
+            if (conversion == ConversionKind.None)
+            {
+                ReportTypeError(
+                    $"Cannot assign constructor argument {index + 1} of type '{argumentType}' to field '{fields[index].Name}' of type '{fieldType}'.",
+                    constructorExpression.Arguments[index]);
+            }
+        }
+
+        for (var index = sharedCount; index < constructorExpression.Arguments.Count; index++)
+        {
+            _ = CheckExpression(constructorExpression.Arguments[index]);
+        }
+
+        return targetType;
+    }
+
+    private TypeSymbol CheckArrayLiteralExpression(ArrayLiteralExpressionSyntax arrayLiteral)
+    {
+        if (arrayLiteral.Elements.Count == 0)
+        {
+            return new ArrayTypeSymbol(PrimitiveTypeSymbol.Unit);
+        }
+
+        var elementType = CheckExpression(arrayLiteral.Elements[0]);
+        for (var index = 1; index < arrayLiteral.Elements.Count; index++)
+        {
+            var candidateType = CheckExpression(arrayLiteral.Elements[index]);
+            if (AreSameType(elementType, candidateType))
+            {
+                continue;
+            }
+
+            if (IsNumeric(elementType) && IsNumeric(candidateType))
+            {
+                elementType = PromoteNumeric(elementType, candidateType);
+                continue;
+            }
+
+            if (ClassifyConversion(candidateType, elementType, isExplicit: false) != ConversionKind.None)
+            {
+                continue;
+            }
+
+            if (ClassifyConversion(elementType, candidateType, isExplicit: false) != ConversionKind.None)
+            {
+                elementType = candidateType;
+                continue;
+            }
+
+            ReportTypeError(
+                $"Array literal element {index + 1} has incompatible type '{candidateType}' (expected '{elementType}').",
+                arrayLiteral.Elements[index]);
+            elementType = PrimitiveTypeSymbol.Error;
+        }
+
+        return new ArrayTypeSymbol(elementType);
+    }
+
+    private TypeSymbol CheckIndexExpression(IndexExpressionSyntax indexExpression)
+    {
+        var targetType = CheckExpression(indexExpression.Target);
+        var indexType = CheckExpression(indexExpression.Index);
+
+        if (!IsIntegerLike(indexType) && !AreSameType(indexType, PrimitiveTypeSymbol.Error))
+        {
+            ReportTypeError("Array index must be an integer value.", indexExpression.Index);
+        }
+
+        if (targetType is ArrayTypeSymbol arrayType)
+        {
+            return arrayType.ElementType;
+        }
+
+        if (!AreSameType(targetType, PrimitiveTypeSymbol.Error))
+        {
+            ReportTypeError($"Cannot index value of type '{targetType}'.", indexExpression.Target);
+        }
+
         return PrimitiveTypeSymbol.Error;
     }
 
@@ -530,18 +790,22 @@ public sealed class TypeChecker
             TokenKind.LessToken or TokenKind.LessOrEqualsToken or TokenKind.GreaterToken or TokenKind.GreaterOrEqualsToken
                 => ReportBinaryError("Comparison operators require numeric operands.", binary),
 
-            TokenKind.DoubleAmpersandToken or TokenKind.DoublePipeToken or TokenKind.AmpersandToken or TokenKind.PipeToken or TokenKind.BangPipeToken or TokenKind.BangAmpersandToken
+            TokenKind.DoubleAmpersandToken or TokenKind.DoublePipeToken or TokenKind.BangPipeToken or TokenKind.BangAmpersandToken
                 when AreSameType(leftType, PrimitiveTypeSymbol.Bool) && AreSameType(rightType, PrimitiveTypeSymbol.Bool)
                 => PrimitiveTypeSymbol.Bool,
 
-            TokenKind.DoubleAmpersandToken or TokenKind.DoublePipeToken or TokenKind.AmpersandToken or TokenKind.PipeToken or TokenKind.BangPipeToken or TokenKind.BangAmpersandToken
+            TokenKind.DoubleAmpersandToken or TokenKind.DoublePipeToken or TokenKind.BangPipeToken or TokenKind.BangAmpersandToken
                 => ReportBinaryError("Logical operators require bool operands.", binary),
 
-            TokenKind.ShiftLeftToken or TokenKind.ShiftRightToken or TokenKind.UnsignedShiftLeftToken or TokenKind.UnsignedShiftRightToken or TokenKind.CaretToken or TokenKind.CaretAmpersandToken
+            TokenKind.AmpersandToken or TokenKind.PipeToken
+                when AreSameType(leftType, PrimitiveTypeSymbol.Bool) && AreSameType(rightType, PrimitiveTypeSymbol.Bool)
+                => PrimitiveTypeSymbol.Bool,
+
+            TokenKind.AmpersandToken or TokenKind.PipeToken or TokenKind.ShiftLeftToken or TokenKind.ShiftRightToken or TokenKind.UnsignedShiftLeftToken or TokenKind.UnsignedShiftRightToken or TokenKind.CaretToken or TokenKind.CaretAmpersandToken
                 when IsIntegerLike(leftType) && IsIntegerLike(rightType)
                 => PrimitiveTypeSymbol.Int,
 
-            TokenKind.ShiftLeftToken or TokenKind.ShiftRightToken or TokenKind.UnsignedShiftLeftToken or TokenKind.UnsignedShiftRightToken or TokenKind.CaretToken or TokenKind.CaretAmpersandToken
+            TokenKind.AmpersandToken or TokenKind.PipeToken or TokenKind.ShiftLeftToken or TokenKind.ShiftRightToken or TokenKind.UnsignedShiftLeftToken or TokenKind.UnsignedShiftRightToken or TokenKind.CaretToken or TokenKind.CaretAmpersandToken
                 => ReportBinaryError("Bitwise operators require integer operands.", binary),
 
             _ => PrimitiveTypeSymbol.Error
@@ -642,6 +906,113 @@ public sealed class TypeChecker
                    && leftParameter.Position == rightParameter.Position;
         }
 
+        if (left is ArrayTypeSymbol leftArray && right is ArrayTypeSymbol rightArray)
+        {
+            return AreSameType(leftArray.ElementType, rightArray.ElementType);
+        }
+
+        return false;
+    }
+
+    private bool TryGetAggregateFields(TypeSymbol type, out IReadOnlyList<FieldSymbol> fields)
+    {
+        fields = [];
+
+        switch (type)
+        {
+            case UserDefinedTypeSymbol userDefined when userDefined.Kind is UserDefinedTypeKind.Struct or UserDefinedTypeKind.Class:
+                fields = userDefined.Fields;
+                return true;
+
+            case ConstructedTypeSymbol constructed
+                when constructed.GenericDefinition.Kind is UserDefinedTypeKind.Struct or UserDefinedTypeKind.Class:
+            {
+                var instantiatedFields = new List<FieldSymbol>(constructed.GenericDefinition.Fields.Count);
+                foreach (var field in constructed.GenericDefinition.Fields)
+                {
+                    instantiatedFields.Add(new FieldSymbol(field.Name, InstantiateAggregateFieldType(field.Type, constructed)));
+                }
+
+                fields = instantiatedFields;
+                return true;
+            }
+
+            default:
+                return false;
+        }
+    }
+
+    private static TypeSymbol InstantiateAggregateFieldType(TypeSymbol fieldType, ConstructedTypeSymbol aggregateType)
+    {
+        if (fieldType is GenericTypeParameterSymbol genericParameter
+            && genericParameter.Position >= 0
+            && genericParameter.Position < aggregateType.TypeArguments.Count)
+        {
+            return aggregateType.TypeArguments[genericParameter.Position];
+        }
+
+        if (fieldType is ConstructedTypeSymbol constructedField)
+        {
+            var resolvedArguments = constructedField.TypeArguments
+                .Select(argument => InstantiateAggregateFieldType(argument, aggregateType))
+                .ToList();
+            return new ConstructedTypeSymbol(constructedField.GenericDefinition, resolvedArguments);
+        }
+
+        return fieldType;
+    }
+
+    private void DeclareAggregateFieldSymbols(string aggregateName, bool isMutable, IReadOnlyList<FieldSymbol> fields, SyntaxNode declarationNode)
+    {
+        foreach (var field in fields)
+        {
+            var fieldVariableName = $"{aggregateName}.{field.Name}";
+            if (Symbols.IsDeclaredInCurrentScope(fieldVariableName))
+            {
+                ReportTypeError($"Field variable '{fieldVariableName}' is already declared in this scope.", declarationNode);
+                continue;
+            }
+
+            Symbols.TryDeclare(new VariableSymbol(fieldVariableName, field.Type, isMutable));
+        }
+    }
+
+    private bool TryResolveEnumVariantType(string enumVariantAccess, out TypeSymbol enumType)
+    {
+        enumType = PrimitiveTypeSymbol.Error;
+        var separatorIndex = enumVariantAccess.LastIndexOf('.');
+        if (separatorIndex <= 0 || separatorIndex == enumVariantAccess.Length - 1)
+        {
+            return false;
+        }
+
+        var enumTypeName = enumVariantAccess[..separatorIndex];
+        var variantName = enumVariantAccess[(separatorIndex + 1)..];
+
+        if (!TryLookupTypeSymbol(enumTypeName, out var resolvedType))
+        {
+            return false;
+        }
+
+        if (resolvedType is UserDefinedTypeSymbol enumDefinition && enumDefinition.Kind == UserDefinedTypeKind.Enum)
+        {
+            if (enumDefinition.Variants.Any(variant => string.Equals(variant.Name, variantName, StringComparison.Ordinal)))
+            {
+                enumType = enumDefinition;
+                return true;
+            }
+
+            return false;
+        }
+
+        if (resolvedType is ConstructedTypeSymbol constructed
+            && constructed.GenericDefinition.Kind == UserDefinedTypeKind.Enum
+            && constructed.GenericDefinition.Variants.Any(variant => string.Equals(variant.Name, variantName, StringComparison.Ordinal)))
+        {
+            enumType = constructed;
+            return true;
+        }
+
         return false;
     }
 
@@ -696,17 +1067,41 @@ public sealed class TypeChecker
     {
         if (name.Contains('.', StringComparison.Ordinal))
         {
+            if (Symbols.TryLookup(name, out var exactSymbol) && exactSymbol is not null)
+            {
+                var containerPath = ExtractModuleName(name);
+                if (IsModuleAccessible(containerPath) || HasVariablePrefix(containerPath))
+                {
+                    symbol = exactSymbol;
+                    return true;
+                }
+            }
+
             var moduleName = ExtractModuleName(name);
             if (!IsModuleAccessible(moduleName))
             {
+                if (!string.IsNullOrWhiteSpace(_currentModule))
+                {
+                    var currentQualified = QualifyTopLevelName(_currentModule, name);
+                    if (Symbols.TryLookup(currentQualified, out var currentScoped) && currentScoped is not null)
+                    {
+                        symbol = currentScoped;
+                        return true;
+                    }
+                }
+
+                foreach (var importedModule in _importedModules)
+                {
+                    var importedQualified = QualifyTopLevelName(importedModule, name);
+                    if (Symbols.TryLookup(importedQualified, out var importedScoped) && importedScoped is not null)
+                    {
+                        symbol = importedScoped;
+                        return true;
+                    }
+                }
+
                 symbol = null!;
                 return false;
-            }
-
-            if (Symbols.TryLookup(name, out var exactSymbol) && exactSymbol is not null)
-            {
-                symbol = exactSymbol;
-                return true;
             }
 
             symbol = null!;
@@ -745,6 +1140,28 @@ public sealed class TypeChecker
         }
 
         symbol = null!;
+        return false;
+    }
+
+    private bool HasVariablePrefix(string dottedPath)
+    {
+        var candidate = dottedPath;
+        while (!string.IsNullOrWhiteSpace(candidate))
+        {
+            if (Symbols.TryLookup(candidate, out var symbol) && symbol is not null)
+            {
+                return true;
+            }
+
+            var separator = candidate.LastIndexOf('.');
+            if (separator <= 0)
+            {
+                break;
+            }
+
+            candidate = candidate[..separator];
+        }
+
         return false;
     }
 
@@ -826,5 +1243,21 @@ public sealed class TypeChecker
     {
         var span = node.Span;
         _diagnostics.ReportTypeError(message, span.Line, span.Column, span.Length);
+    }
+
+    private bool TryResolveIndexedBaseVariable(ExpressionSyntax expression, out VariableSymbol symbol)
+    {
+        switch (expression)
+        {
+            case IndexExpressionSyntax indexExpression:
+                return TryResolveIndexedBaseVariable(indexExpression.Target, out symbol);
+
+            case NameExpressionSyntax name:
+                return TryLookupVariableSymbol(name.Identifier, out symbol);
+
+            default:
+                symbol = null!;
+                return false;
+        }
     }
 }

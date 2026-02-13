@@ -83,8 +83,44 @@ public sealed class OwnershipAnalyzer
                 AnalyzeAssignment(assignment);
                 break;
 
+            case IndexedAssignmentStatementSyntax indexedAssignment:
+                AnalyzeExpression(indexedAssignment.Target);
+                AnalyzeExpression(indexedAssignment.Expression);
+                break;
+
+            case MatchStatementSyntax matchStatement:
+                AnalyzeExpression(matchStatement.Expression);
+                foreach (var arm in matchStatement.Arms)
+                {
+                    if (arm.Pattern is not null)
+                    {
+                        AnalyzeExpression(arm.Pattern);
+                    }
+
+                    AnalyzeStatement(arm.Body);
+                }
+
+                break;
+
             case ExpressionStatementSyntax expressionStatement:
                 AnalyzeExpression(expressionStatement.Expression);
+                break;
+
+            case ThrowStatementSyntax throwStatement:
+                if (throwStatement.ErrorExpression is not null)
+                {
+                    AnalyzeExpression(throwStatement.ErrorExpression);
+                }
+
+                if (throwStatement.DetailExpression is not null)
+                {
+                    AnalyzeExpression(throwStatement.DetailExpression);
+                }
+
+                break;
+
+            case GcStatementSyntax gcStatement:
+                AnalyzeStatement(gcStatement.Body);
                 break;
 
             case ReturnStatementSyntax returnStatement when returnStatement.Expression is not null:
@@ -112,6 +148,10 @@ public sealed class OwnershipAnalyzer
 
                 AnalyzeStatement(loopStatement.Body);
                 ExitScope();
+                break;
+
+            case JotStatementSyntax jotStatement:
+                AnalyzeExpression(jotStatement.Expression);
                 break;
 
             case TypeDeclarationStatementSyntax:
@@ -224,6 +264,27 @@ public sealed class OwnershipAnalyzer
                 AnalyzeNameExpression(name);
                 return;
 
+            case ConstructorExpressionSyntax constructor:
+                foreach (var argument in constructor.Arguments)
+                {
+                    AnalyzeExpression(argument);
+                }
+
+                return;
+
+            case ArrayLiteralExpressionSyntax arrayLiteral:
+                foreach (var element in arrayLiteral.Elements)
+                {
+                    AnalyzeExpression(element);
+                }
+
+                return;
+
+            case IndexExpressionSyntax indexExpression:
+                AnalyzeExpression(indexExpression.Target);
+                AnalyzeExpression(indexExpression.Index);
+                return;
+
             case CastExpressionSyntax cast:
                 AnalyzeExpression(cast.Expression);
                 return;
@@ -316,14 +377,40 @@ public sealed class OwnershipAnalyzer
     {
         if (name.Contains('.', StringComparison.Ordinal))
         {
+            if (TryLookup(name, out variable))
+            {
+                var containerPath = ExtractModuleName(name);
+                if (IsModuleAccessible(containerPath) || HasVariablePrefix(containerPath))
+                {
+                    return true;
+                }
+            }
+
             var moduleName = ExtractModuleName(name);
             if (!IsModuleAccessible(moduleName))
             {
+                if (!string.IsNullOrWhiteSpace(_currentModule))
+                {
+                    if (TryLookup(QualifyTopLevelName(_currentModule, name), out variable))
+                    {
+                        return true;
+                    }
+                }
+
+                foreach (var importedModule in _importedModules)
+                {
+                    if (TryLookup(QualifyTopLevelName(importedModule, name), out variable))
+                    {
+                        return true;
+                    }
+                }
+
                 variable = null!;
                 return false;
             }
 
-            return TryLookup(name, out variable);
+            variable = null!;
+            return false;
         }
 
         if (TryLookup(name, out variable))
@@ -348,6 +435,28 @@ public sealed class OwnershipAnalyzer
         }
 
         variable = null!;
+        return false;
+    }
+
+    private bool HasVariablePrefix(string dottedPath)
+    {
+        var candidate = dottedPath;
+        while (!string.IsNullOrWhiteSpace(candidate))
+        {
+            if (TryLookup(candidate, out _))
+            {
+                return true;
+            }
+
+            var separator = candidate.LastIndexOf('.');
+            if (separator <= 0)
+            {
+                break;
+            }
+
+            candidate = candidate[..separator];
+        }
+
         return false;
     }
 
@@ -385,6 +494,8 @@ public sealed class OwnershipAnalyzer
         {
             LiteralExpressionSyntax literal => literal.Value is string,
             NameExpressionSyntax name when TryLookupWithContext(name.Identifier, out var variable) => variable.IsMoveType,
+            ConstructorExpressionSyntax constructor => !IsCopyTypeName(constructor.TargetType.Name),
+            ArrayLiteralExpressionSyntax => true,
             CastExpressionSyntax cast => IsMoveType(cast.TargetType),
             ParenthesizedExpressionSyntax parenthesized => InferExpressionMoveType(parenthesized.Expression),
             _ => false

@@ -15,6 +15,11 @@ public enum BytecodeOpCode
     Jump,
     JumpIfTrue,
     JumpIfFalse,
+    Print,
+    Throw,
+    ArrayCreate,
+    ArrayGet,
+    ArraySet,
     Return
 }
 

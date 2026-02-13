@@ -172,6 +172,54 @@ public sealed class BytecodeVirtualMachine
                         pc = ToBool(slots[instruction.A]) ? pc + 1 : instruction.B;
                         break;
 
+                    case BytecodeOpCode.Print:
+                        Console.WriteLine(FormatPrintedValue(slots[instruction.A]));
+                        pc++;
+                        break;
+
+                    case BytecodeOpCode.Throw:
+                    {
+                        var errorValue = instruction.A >= 0 ? slots[instruction.A] : null;
+                        var detailValue = instruction.B >= 0 ? slots[instruction.B] : null;
+                        return new BytecodeExecutionResult(false, null, BuildThrownErrorMessage(errorValue, detailValue));
+                    }
+
+                    case BytecodeOpCode.ArrayCreate:
+                    {
+                        var length = Math.Max(0, (int)ToLong(slots[instruction.B]));
+                        slots[instruction.A] = new object?[length];
+                        pc++;
+                        break;
+                    }
+
+                    case BytecodeOpCode.ArrayGet:
+                    {
+                        var array = RequireArrayValue(slots[instruction.B]);
+                        var index = (int)ToLong(slots[instruction.C]);
+                        if (index < 0 || index >= array.Length)
+                        {
+                            throw new IndexOutOfRangeException($"Array index {index} is out of range for length {array.Length}.");
+                        }
+
+                        slots[instruction.A] = array[index];
+                        pc++;
+                        break;
+                    }
+
+                    case BytecodeOpCode.ArraySet:
+                    {
+                        var array = RequireArrayValue(slots[instruction.A]);
+                        var index = (int)ToLong(slots[instruction.B]);
+                        if (index < 0 || index >= array.Length)
+                        {
+                            throw new IndexOutOfRangeException($"Array index {index} is out of range for length {array.Length}.");
+                        }
+
+                        array[index] = slots[instruction.C];
+                        pc++;
+                        break;
+                    }
+
                     case BytecodeOpCode.Return:
                         return new BytecodeExecutionResult(true, instruction.A < 0 ? null : slots[instruction.A], null);
 
@@ -982,6 +1030,33 @@ public sealed class BytecodeVirtualMachine
             IrTypeKind.String => value.ToString() ?? string.Empty,
             _ => value
         };
+    }
+
+    private static string FormatPrintedValue(object? value)
+    {
+        return value switch
+        {
+            null => "null",
+            bool boolean => boolean ? "true" : "false",
+            _ => value.ToString() ?? "null"
+        };
+    }
+
+    private static string BuildThrownErrorMessage(object? errorValue, object? detailValue)
+    {
+        var error = FormatPrintedValue(errorValue);
+        if (detailValue is null)
+        {
+            return $"Thrown: {error}";
+        }
+
+        return $"Thrown: {error} ({FormatPrintedValue(detailValue)})";
+    }
+
+    private static object?[] RequireArrayValue(object? value)
+    {
+        return value as object?[]
+               ?? throw new InvalidOperationException("Value is not an array.");
     }
 
     private static bool ToBool(object? value)

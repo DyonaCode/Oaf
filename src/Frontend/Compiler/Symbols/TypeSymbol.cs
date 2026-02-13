@@ -152,3 +152,14 @@ public sealed class ConstructedTypeSymbol : TypeSymbol
         return $"{definition.Name}<{string.Join(", ", typeArguments.Select(argument => argument.Name))}>";
     }
 }
+
+public sealed class ArrayTypeSymbol : TypeSymbol
+{
+    public ArrayTypeSymbol(TypeSymbol elementType)
+        : base($"[{elementType.Name}]")
+    {
+        ElementType = elementType;
+    }
+
+    public TypeSymbol ElementType { get; }
+}

@@ -28,6 +28,51 @@ public sealed class NameExpressionSyntax : ExpressionSyntax
     public override SyntaxNodeKind Kind => SyntaxNodeKind.NameExpression;
 }
 
+public sealed class ConstructorExpressionSyntax : ExpressionSyntax
+{
+    public ConstructorExpressionSyntax(TypeReferenceSyntax targetType, IReadOnlyList<ExpressionSyntax> arguments, SourceSpan span)
+        : base(span)
+    {
+        TargetType = targetType;
+        Arguments = arguments;
+    }
+
+    public TypeReferenceSyntax TargetType { get; }
+
+    public IReadOnlyList<ExpressionSyntax> Arguments { get; }
+
+    public override SyntaxNodeKind Kind => SyntaxNodeKind.ConstructorExpression;
+}
+
+public sealed class ArrayLiteralExpressionSyntax : ExpressionSyntax
+{
+    public ArrayLiteralExpressionSyntax(IReadOnlyList<ExpressionSyntax> elements, SourceSpan span)
+        : base(span)
+    {
+        Elements = elements;
+    }
+
+    public IReadOnlyList<ExpressionSyntax> Elements { get; }
+
+    public override SyntaxNodeKind Kind => SyntaxNodeKind.ArrayLiteralExpression;
+}
+
+public sealed class IndexExpressionSyntax : ExpressionSyntax
+{
+    public IndexExpressionSyntax(ExpressionSyntax target, ExpressionSyntax index, SourceSpan span)
+        : base(span)
+    {
+        Target = target;
+        Index = index;
+    }
+
+    public ExpressionSyntax Target { get; }
+
+    public ExpressionSyntax Index { get; }
+
+    public override SyntaxNodeKind Kind => SyntaxNodeKind.IndexExpression;
+}
+
 public sealed class CastExpressionSyntax : ExpressionSyntax
 {
     public CastExpressionSyntax(TypeReferenceSyntax targetType, ExpressionSyntax expression, SourceSpan span)

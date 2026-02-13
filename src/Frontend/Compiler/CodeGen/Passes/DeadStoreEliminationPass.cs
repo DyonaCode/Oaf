@@ -66,6 +66,7 @@ public sealed class DeadStoreEliminationPass : IIrOptimizationPass
                     break;
 
                 case IrReturnInstruction:
+                case IrThrowInstruction:
                     break;
 
                 default:

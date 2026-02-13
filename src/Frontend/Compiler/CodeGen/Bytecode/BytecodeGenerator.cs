@@ -201,6 +201,47 @@ public sealed class BytecodeGenerator
                     break;
                 }
 
+            case IrPrintInstruction print:
+                {
+                    var value = MaterializeOperand(print.Value, context);
+                    context.Function.Instructions.Add(new BytecodeInstruction(BytecodeOpCode.Print, value));
+                    break;
+                }
+
+            case IrThrowInstruction throwInstruction:
+                {
+                    var error = throwInstruction.Error is null ? -1 : MaterializeOperand(throwInstruction.Error, context);
+                    var detail = throwInstruction.Detail is null ? -1 : MaterializeOperand(throwInstruction.Detail, context);
+                    context.Function.Instructions.Add(new BytecodeInstruction(BytecodeOpCode.Throw, error, detail));
+                    break;
+                }
+
+            case IrArrayCreateInstruction arrayCreate:
+                {
+                    var destination = GetSlot(arrayCreate.Destination, context);
+                    var length = MaterializeOperand(arrayCreate.Length, context);
+                    context.Function.Instructions.Add(new BytecodeInstruction(BytecodeOpCode.ArrayCreate, destination, length));
+                    break;
+                }
+
+            case IrArrayGetInstruction arrayGet:
+                {
+                    var destination = GetSlot(arrayGet.Destination, context);
+                    var array = MaterializeOperand(arrayGet.Array, context);
+                    var index = MaterializeOperand(arrayGet.Index, context);
+                    context.Function.Instructions.Add(new BytecodeInstruction(BytecodeOpCode.ArrayGet, destination, array, index));
+                    break;
+                }
+
+            case IrArraySetInstruction arraySet:
+                {
+                    var array = MaterializeOperand(arraySet.Array, context);
+                    var index = MaterializeOperand(arraySet.Index, context);
+                    var value = MaterializeOperand(arraySet.Value, context);
+                    context.Function.Instructions.Add(new BytecodeInstruction(BytecodeOpCode.ArraySet, array, index, value));
+                    break;
+                }
+
             case IrBranchInstruction branch:
                 {
                     var condition = MaterializeOperand(branch.Condition, context);
@@ -423,7 +464,9 @@ public sealed class BytecodeGenerator
             or BytecodeOpCode.Binary
             or BytecodeOpCode.BinaryInt
             or BytecodeOpCode.BinaryIntConstRight
-            or BytecodeOpCode.Cast;
+            or BytecodeOpCode.Cast
+            or BytecodeOpCode.ArrayCreate
+            or BytecodeOpCode.ArrayGet;
     }
 
     private static bool IsSlotReadAfter(IReadOnlyList<BytecodeInstruction> instructions, int slot, int startIndex)
@@ -450,6 +493,11 @@ public sealed class BytecodeGenerator
             BytecodeOpCode.BinaryInt => instruction.C == slot || instruction.D == slot,
             BytecodeOpCode.BinaryIntConstRight => instruction.C == slot,
             BytecodeOpCode.Cast => instruction.B == slot,
+            BytecodeOpCode.Print => instruction.A == slot,
+            BytecodeOpCode.Throw => instruction.A == slot || instruction.B == slot,
+            BytecodeOpCode.ArrayCreate => instruction.B == slot,
+            BytecodeOpCode.ArrayGet => instruction.B == slot || instruction.C == slot,
+            BytecodeOpCode.ArraySet => instruction.A == slot || instruction.B == slot || instruction.C == slot,
             BytecodeOpCode.JumpIfTrue or BytecodeOpCode.JumpIfFalse => instruction.A == slot,
             BytecodeOpCode.JumpIfBinaryIntTrue => instruction.A == slot || instruction.B == slot,
             BytecodeOpCode.JumpIfBinaryIntConstRightTrue => instruction.A == slot,

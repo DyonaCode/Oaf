@@ -6,6 +6,11 @@ public enum IrInstructionKind
     Unary,
     Binary,
     Cast,
+    Print,
+    Throw,
+    ArrayCreate,
+    ArrayGet,
+    ArraySet,
     Branch,
     Jump,
     Return
@@ -182,6 +187,167 @@ public sealed class IrCastInstruction : IrInstruction
     public override string ToDisplayString()
     {
         return $"{Destination.DisplayText} = ({TargetType.Name}){Source.DisplayText}";
+    }
+}
+
+public sealed class IrPrintInstruction : IrInstruction
+{
+    public IrPrintInstruction(IrValue value)
+    {
+        Value = value;
+    }
+
+    public IrValue Value { get; set; }
+
+    public override IrInstructionKind Kind => IrInstructionKind.Print;
+
+    public override bool HasSideEffects => true;
+
+    public override IEnumerable<IrValue> ReadValues()
+    {
+        yield return Value;
+    }
+
+    public override string ToDisplayString()
+    {
+        return $"print {Value.DisplayText}";
+    }
+}
+
+public sealed class IrThrowInstruction : IrInstruction
+{
+    public IrThrowInstruction(IrValue? error, IrValue? detail)
+    {
+        Error = error;
+        Detail = detail;
+    }
+
+    public IrValue? Error { get; set; }
+
+    public IrValue? Detail { get; set; }
+
+    public override IrInstructionKind Kind => IrInstructionKind.Throw;
+
+    public override bool IsTerminator => true;
+
+    public override bool HasSideEffects => true;
+
+    public override IEnumerable<IrValue> ReadValues()
+    {
+        if (Error is not null)
+        {
+            yield return Error;
+        }
+
+        if (Detail is not null)
+        {
+            yield return Detail;
+        }
+    }
+
+    public override string ToDisplayString()
+    {
+        if (Error is null && Detail is null)
+        {
+            return "throw";
+        }
+
+        if (Detail is null)
+        {
+            return $"throw {Error!.DisplayText}";
+        }
+
+        return $"throw {Error!.DisplayText}, {Detail.DisplayText}";
+    }
+}
+
+public sealed class IrArrayCreateInstruction : IrInstruction
+{
+    public IrArrayCreateInstruction(IrTemporaryValue destination, IrValue length)
+    {
+        Destination = destination;
+        Length = length;
+    }
+
+    public IrTemporaryValue Destination { get; }
+
+    public IrValue Length { get; set; }
+
+    public override IrInstructionKind Kind => IrInstructionKind.ArrayCreate;
+
+    public override string? WrittenTemporaryName => Destination.Name;
+
+    public override IEnumerable<IrValue> ReadValues()
+    {
+        yield return Length;
+    }
+
+    public override string ToDisplayString()
+    {
+        return $"{Destination.DisplayText} = newarray {Length.DisplayText}";
+    }
+}
+
+public sealed class IrArrayGetInstruction : IrInstruction
+{
+    public IrArrayGetInstruction(IrTemporaryValue destination, IrValue array, IrValue index)
+    {
+        Destination = destination;
+        Array = array;
+        Index = index;
+    }
+
+    public IrTemporaryValue Destination { get; }
+
+    public IrValue Array { get; set; }
+
+    public IrValue Index { get; set; }
+
+    public override IrInstructionKind Kind => IrInstructionKind.ArrayGet;
+
+    public override string? WrittenTemporaryName => Destination.Name;
+
+    public override IEnumerable<IrValue> ReadValues()
+    {
+        yield return Array;
+        yield return Index;
+    }
+
+    public override string ToDisplayString()
+    {
+        return $"{Destination.DisplayText} = {Array.DisplayText}[{Index.DisplayText}]";
+    }
+}
+
+public sealed class IrArraySetInstruction : IrInstruction
+{
+    public IrArraySetInstruction(IrValue array, IrValue index, IrValue value)
+    {
+        Array = array;
+        Index = index;
+        Value = value;
+    }
+
+    public IrValue Array { get; set; }
+
+    public IrValue Index { get; set; }
+
+    public IrValue Value { get; set; }
+
+    public override IrInstructionKind Kind => IrInstructionKind.ArraySet;
+
+    public override bool HasSideEffects => true;
+
+    public override IEnumerable<IrValue> ReadValues()
+    {
+        yield return Array;
+        yield return Index;
+        yield return Value;
+    }
+
+    public override string ToDisplayString()
+    {
+        return $"{Array.DisplayText}[{Index.DisplayText}] = {Value.DisplayText}";
     }
 }
 

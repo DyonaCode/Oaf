@@ -1,0 +1,140 @@
+module examples.spec.coverage;
+import examples.basics;
+import "github.com/user/package/v1";
+
+// Implemented-spec coverage + OptimizedExpansion translation primitives.
+struct Rect [int row, int col, int height, int width];
+struct Pair<T> [T left, T right];
+class User [string name, int age];
+enum Mode => Basic, Advanced;
+
+int immutable_seed = 10;
+flux acc = immutable_seed;
+acc += 5;
+acc -= 2;
+acc *= 3;
+acc /= 2;
+
+float ratio = 5.5;
+int narrowed = (int)ratio;
+char letter = 'A';
+string message = "mode=" + "spec";
+
+pair = Pair<int>[2, 3];
+rect = Rect[1, 2, 2, 3];
+user = User["Ada", 36];
+Mode mode = Mode.Advanced;
+
+if mode == Mode.Advanced, pair.left < pair.right => {
+    acc += rect.width;
+} -> {
+    acc -= 1;
+}
+
+flux mask = 0b01111;
+mask = mask & 0b00111;
+mask = mask | 0b10000;
+mask = mask ^ 0b11000;
+mask = mask ^& 0b00111;
+mask = mask << 1;
+mask = mask >> 2;
+mask = mask +<< 1;
+mask = mask +>> 1;
+flux inverted_mask = ~mask;
+
+bool ready = true;
+flux bool_mix = ready && (mode == Mode.Advanced);
+bool_mix = bool_mix || false;
+bool_mix = bool_mix !| false;
+bool_mix = bool_mix !& true;
+flux not_ready = !bool_mix;
+
+flux mode_score = 0;
+mode match =>
+    Mode.Basic -> mode_score = 1;
+    Mode.Advanced -> mode_score = 7;
+    -> mode_score = 0;;;
+
+flux bool_score = 0;
+if not_ready => bool_score = 1; -> bool_score = 2;
+
+gc => {
+    bool_score += 0;
+}
+
+flux root_value = 81 /^ 2;
+flux mod_value = 17 % 5;
+flux hex_value = 0x10;
+
+flux [int] row_masks = [0b00111, 0b01111, 0b10011, 0b11110];
+flux [[int]] grid = [[1, 2], [3, 4]];
+grid[1][0] = row_masks[0] & 0b00011;
+flux picked = grid[1][0];
+
+// Nested loops with bitmask intersection, mirroring key translation patterns.
+flux top = 0;
+flux coverage = 0;
+loop top < 4 => {
+    flux running = row_masks[top];
+    if running == 0 => {
+        top += 1;
+        continue;
+    }
+
+    flux bottom = top;
+    loop bottom < 4 => {
+        running = running & row_masks[bottom];
+        if running == 0 => break;
+        coverage += 1;
+        bottom += 1;
+    }
+
+    top += 1;
+}
+
+flux loop_sum = 0;
+flux n = 4;
+loop n > 0 => {
+    if n == 2 => {
+        n -= 1;
+        continue;
+    }
+
+    loop_sum += n;
+    n -= 1;
+}
+
+flux parallel_counter = 3;
+flux parallel_sum = 0;
+paralloop parallel_counter > 0 => {
+    parallel_sum += parallel_counter;
+    parallel_counter -= 1;
+}
+
+Jot("spec_coverage");
+Jot(message);
+Jot(letter);
+Jot(user.age);
+Jot(rect.col);
+Jot(picked);
+Jot(coverage);
+Jot(parallel_sum);
+Jot(inverted_mask);
+
+if false => throw "Unreachable", "spec coverage";
+
+return acc
+    + narrowed
+    + pair.left
+    + pair.right
+    + rect.height
+    + user.age
+    + mode_score
+    + bool_score
+    + root_value
+    + mod_value
+    + picked
+    + coverage
+    + loop_sum
+    + parallel_sum
+    + (hex_value / 8);

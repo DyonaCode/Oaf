@@ -17,7 +17,14 @@ public static class BytecodeTests
             ("fuses_integer_condition_jumps", FusesIntegerConditionJumps),
             ("executes_arithmetic_return", ExecutesArithmeticReturn),
             ("executes_loop_countdown", ExecutesLoopCountdown),
+            ("executes_if_with_comma_separated_conditions", ExecutesIfWithCommaSeparatedConditions),
+            ("executes_module_scoped_field_access", ExecutesModuleScopedFieldAccess),
+            ("executes_match_statement", ExecutesMatchStatement),
+            ("executes_gc_statement", ExecutesGcStatement),
+            ("throw_statement_returns_failed_execution", ThrowStatementReturnsFailedExecution),
             ("executes_explicit_cast_with_truncation", ExecutesExplicitCastWithTruncation),
+            ("executes_jot_statement_with_console_output", ExecutesJotStatementWithConsoleOutput),
+            ("executes_array_index_assignment", ExecutesArrayIndexAssignment),
             ("returns_boolean_from_fast_path", ReturnsBooleanFromFastPath),
             ("returns_char_from_fast_path", ReturnsCharFromFastPath)
         ];
@@ -100,6 +107,68 @@ public static class BytecodeTests
         TestAssertions.Equal(0L, execution.ReturnValue as long? ?? Convert.ToInt64(execution.ReturnValue));
     }
 
+    private static void ExecutesIfWithCommaSeparatedConditions()
+    {
+        const string source = "flux a = 3; flux b = 1; if a > 2, b < 2 => return 1; -> return 0;";
+        var result = Compile(source);
+
+        var vm = new BytecodeVirtualMachine();
+        var execution = vm.Execute(result.BytecodeProgram);
+
+        TestAssertions.True(execution.Success, execution.ErrorMessage);
+        TestAssertions.Equal(1L, execution.ReturnValue as long? ?? Convert.ToInt64(execution.ReturnValue));
+    }
+
+    private static void ExecutesModuleScopedFieldAccess()
+    {
+        const string source = "module app.core; struct Point [int x, int y]; p = Point[3, 4]; return p.x + p.y;";
+        var result = Compile(source);
+
+        var vm = new BytecodeVirtualMachine();
+        var execution = vm.Execute(result.BytecodeProgram);
+
+        TestAssertions.True(execution.Success, execution.ErrorMessage);
+        TestAssertions.Equal(7L, execution.ReturnValue as long? ?? Convert.ToInt64(execution.ReturnValue));
+    }
+
+    private static void ExecutesMatchStatement()
+    {
+        const string source = "flux value = 2; value match => 1 -> value = 10; 2 -> value = 20; -> value = 0;;; return value;";
+        var result = Compile(source);
+
+        var vm = new BytecodeVirtualMachine();
+        var execution = vm.Execute(result.BytecodeProgram);
+
+        TestAssertions.True(execution.Success, execution.ErrorMessage);
+        TestAssertions.Equal(20L, execution.ReturnValue as long? ?? Convert.ToInt64(execution.ReturnValue));
+    }
+
+    private static void ExecutesGcStatement()
+    {
+        const string source = "flux total = 1; gc => { total += 4; } return total;";
+        var result = Compile(source);
+
+        var vm = new BytecodeVirtualMachine();
+        var execution = vm.Execute(result.BytecodeProgram);
+
+        TestAssertions.True(execution.Success, execution.ErrorMessage);
+        TestAssertions.Equal(5L, execution.ReturnValue as long? ?? Convert.ToInt64(execution.ReturnValue));
+    }
+
+    private static void ThrowStatementReturnsFailedExecution()
+    {
+        const string source = "throw \"OperationFailed\", \"Division by zero\"; return 0;";
+        var result = Compile(source);
+
+        var vm = new BytecodeVirtualMachine();
+        var execution = vm.Execute(result.BytecodeProgram);
+
+        TestAssertions.False(execution.Success, "Expected throw statement to fail execution.");
+        var error = execution.ErrorMessage ?? string.Empty;
+        TestAssertions.True(error.Contains("OperationFailed", StringComparison.Ordinal), "Expected thrown error name in runtime message.");
+        TestAssertions.True(error.Contains("Division by zero", StringComparison.Ordinal), "Expected thrown error detail in runtime message.");
+    }
+
     private static void ExecutesExplicitCastWithTruncation()
     {
         const string source = "float f = 3.9; int i = (int)f; return i;";
@@ -110,6 +179,44 @@ public static class BytecodeTests
 
         TestAssertions.True(execution.Success, execution.ErrorMessage);
         TestAssertions.Equal(3L, execution.ReturnValue as long? ?? Convert.ToInt64(execution.ReturnValue));
+    }
+
+    private static void ExecutesJotStatementWithConsoleOutput()
+    {
+        const string source = "Jot(42); Jot(\"ok\"); return 0;";
+        var result = Compile(source);
+
+        var vm = new BytecodeVirtualMachine();
+        var originalOut = Console.Out;
+        var writer = new StringWriter();
+        Console.SetOut(writer);
+
+        try
+        {
+            var execution = vm.Execute(result.BytecodeProgram);
+            TestAssertions.True(execution.Success, execution.ErrorMessage);
+            TestAssertions.Equal(0L, execution.ReturnValue as long? ?? Convert.ToInt64(execution.ReturnValue));
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+        }
+
+        var output = writer.ToString().Replace("\r\n", "\n", StringComparison.Ordinal);
+        TestAssertions.True(output.Contains("42\n", StringComparison.Ordinal), "Expected Jot to print integer value.");
+        TestAssertions.True(output.Contains("ok\n", StringComparison.Ordinal), "Expected Jot to print string value.");
+    }
+
+    private static void ExecutesArrayIndexAssignment()
+    {
+        const string source = "flux values = [1, 2, 3]; values[1] = 9; return values[1];";
+        var result = Compile(source);
+
+        var vm = new BytecodeVirtualMachine();
+        var execution = vm.Execute(result.BytecodeProgram);
+
+        TestAssertions.True(execution.Success, execution.ErrorMessage);
+        TestAssertions.Equal(9L, execution.ReturnValue as long? ?? Convert.ToInt64(execution.ReturnValue));
     }
 
     private static void ReturnsBooleanFromFastPath()

@@ -15,9 +15,21 @@ public static class TypeCheckerTests
             ("reports_generic_arity_mismatch", ReportsGenericArityMismatch),
             ("infers_local_type_from_expression", InfersLocalTypeFromExpression),
             ("applies_numeric_widening_coercions", AppliesNumericWideningCoercions),
+            ("allows_integer_bitwise_and_or", AllowsIntegerBitwiseAndOr),
             ("rejects_narrowing_numeric_conversion", RejectsNarrowingNumericConversion),
             ("allows_explicit_narrowing_cast", AllowsExplicitNarrowingCast),
             ("rejects_invalid_explicit_cast", RejectsInvalidExplicitCast),
+            ("supports_constructor_and_field_access", SupportsConstructorAndFieldAccess),
+            ("supports_module_scoped_constructor_and_field_access", SupportsModuleScopedConstructorAndFieldAccess),
+            ("supports_enum_variant_access", SupportsEnumVariantAccess),
+            ("supports_match_statement", SupportsMatchStatement),
+            ("supports_throw_statement", SupportsThrowStatement),
+            ("supports_gc_statement", SupportsGcStatement),
+            ("supports_public_class_declaration_with_modifiers", SupportsPublicClassDeclarationWithModifiers),
+            ("supports_if_comma_separated_conditions", SupportsIfCommaSeparatedConditions),
+            ("supports_jot_statement", SupportsJotStatement),
+            ("supports_array_literals_and_indexing", SupportsArrayLiteralsAndIndexing),
+            ("rejects_non_integer_array_index", RejectsNonIntegerArrayIndex),
             ("reports_break_outside_loop_with_location", ReportsBreakOutsideLoopWithLocation),
             ("allows_break_and_continue_inside_loop", AllowsBreakAndContinueInsideLoop)
         ];
@@ -65,6 +77,13 @@ public static class TypeCheckerTests
         TestAssertions.False(diagnostics.HasErrors, "Expected char->int and int/char->float coercions to be valid.");
     }
 
+    private static void AllowsIntegerBitwiseAndOr()
+    {
+        const string source = "int a = 6; int b = 3; int c = a & b; int d = a | b;";
+        var diagnostics = CompileAndTypeCheck(source);
+        TestAssertions.False(diagnostics.HasErrors, "Expected '&' and '|' to support integer operands.");
+    }
+
     private static void RejectsNarrowingNumericConversion()
     {
         const string source = "float f = 1.25; int i = f;";
@@ -84,6 +103,83 @@ public static class TypeCheckerTests
         const string source = "value = (bool)1;";
         var diagnostics = CompileAndTypeCheck(source);
         TestAssertions.True(diagnostics.HasErrors, "Expected invalid explicit cast to be rejected.");
+    }
+
+    private static void SupportsConstructorAndFieldAccess()
+    {
+        const string source = "struct Point [int x, int y]; start = Point[3, 4]; int x = start.x; int y = start.y;";
+        var diagnostics = CompileAndTypeCheck(source);
+        TestAssertions.False(diagnostics.HasErrors, "Expected constructor and field access syntax to type-check.");
+    }
+
+    private static void SupportsModuleScopedConstructorAndFieldAccess()
+    {
+        const string source = "module app.core; struct Point [int x, int y]; p = Point[3, 4]; int x = p.x; int y = p.y;";
+        var diagnostics = CompileAndTypeCheck(source);
+        TestAssertions.False(diagnostics.HasErrors, "Expected module-scoped constructor and field access to type-check.");
+    }
+
+    private static void SupportsEnumVariantAccess()
+    {
+        const string source = "enum Status => Active, Inactive; status = Status.Active; if status == Status.Inactive => return 0; return 1;";
+        var diagnostics = CompileAndTypeCheck(source);
+        TestAssertions.False(diagnostics.HasErrors, "Expected enum variant access to type-check.");
+    }
+
+    private static void SupportsMatchStatement()
+    {
+        const string source = "flux value = 2; value match => 1 -> value = 10; 2 -> value = 20; -> value = 0;;; return value;";
+        var diagnostics = CompileAndTypeCheck(source);
+        TestAssertions.False(diagnostics.HasErrors, "Expected match statement to type-check.");
+    }
+
+    private static void SupportsThrowStatement()
+    {
+        const string source = "if false => throw \"OperationFailed\", \"Division by zero\"; return 1;";
+        var diagnostics = CompileAndTypeCheck(source);
+        TestAssertions.False(diagnostics.HasErrors, "Expected throw statement to type-check.");
+    }
+
+    private static void SupportsGcStatement()
+    {
+        const string source = "flux total = 1; gc => { total += 2; } return total;";
+        var diagnostics = CompileAndTypeCheck(source);
+        TestAssertions.False(diagnostics.HasErrors, "Expected gc block to type-check.");
+    }
+
+    private static void SupportsPublicClassDeclarationWithModifiers()
+    {
+        const string source = "public class Program public, gcoff; instance = Program[]; return 0;";
+        var diagnostics = CompileAndTypeCheck(source);
+        TestAssertions.False(diagnostics.HasErrors, "Expected public class declaration modifiers to type-check.");
+    }
+
+    private static void SupportsIfCommaSeparatedConditions()
+    {
+        const string source = "flux ready = true; flux ok = false; if ready, !ok => return 1; -> return 0;";
+        var diagnostics = CompileAndTypeCheck(source);
+        TestAssertions.False(diagnostics.HasErrors, "Expected comma-separated if conditions to type-check.");
+    }
+
+    private static void SupportsJotStatement()
+    {
+        const string source = "flux x = 3; Jot(x); Jot(\"done\"); return x;";
+        var diagnostics = CompileAndTypeCheck(source);
+        TestAssertions.False(diagnostics.HasErrors, "Expected Jot statement to type-check.");
+    }
+
+    private static void SupportsArrayLiteralsAndIndexing()
+    {
+        const string source = "flux [int] values = [1, 2, 3]; flux idx = 1; values[idx] = 7; int picked = values[idx]; return picked;";
+        var diagnostics = CompileAndTypeCheck(source);
+        TestAssertions.False(diagnostics.HasErrors, "Expected array declaration/index assignment/index read to type-check.");
+    }
+
+    private static void RejectsNonIntegerArrayIndex()
+    {
+        const string source = "flux values = [1, 2, 3]; flux i = 1.5; return values[i];";
+        var diagnostics = CompileAndTypeCheck(source);
+        TestAssertions.True(diagnostics.HasErrors, "Expected non-integer index to fail.");
     }
 
     private static void ReportsBreakOutsideLoopWithLocation()

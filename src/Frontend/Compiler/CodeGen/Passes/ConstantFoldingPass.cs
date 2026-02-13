@@ -83,6 +83,40 @@ public sealed class ConstantFoldingPass : IIrOptimizationPass
 
                         break;
 
+                    case IrPrintInstruction print:
+                        print.Value = ReplaceKnownConstants(print.Value, knownConstants);
+                        break;
+
+                    case IrThrowInstruction throwInstruction:
+                        if (throwInstruction.Error is not null)
+                        {
+                            throwInstruction.Error = ReplaceKnownConstants(throwInstruction.Error, knownConstants);
+                        }
+
+                        if (throwInstruction.Detail is not null)
+                        {
+                            throwInstruction.Detail = ReplaceKnownConstants(throwInstruction.Detail, knownConstants);
+                        }
+
+                        break;
+
+                    case IrArrayCreateInstruction arrayCreate:
+                        arrayCreate.Length = ReplaceKnownConstants(arrayCreate.Length, knownConstants);
+                        knownConstants.Remove(arrayCreate.Destination.Name);
+                        break;
+
+                    case IrArrayGetInstruction arrayGet:
+                        arrayGet.Array = ReplaceKnownConstants(arrayGet.Array, knownConstants);
+                        arrayGet.Index = ReplaceKnownConstants(arrayGet.Index, knownConstants);
+                        knownConstants.Remove(arrayGet.Destination.Name);
+                        break;
+
+                    case IrArraySetInstruction arraySet:
+                        arraySet.Array = ReplaceKnownConstants(arraySet.Array, knownConstants);
+                        arraySet.Index = ReplaceKnownConstants(arraySet.Index, knownConstants);
+                        arraySet.Value = ReplaceKnownConstants(arraySet.Value, knownConstants);
+                        break;
+
                     case IrBranchInstruction branch:
                         branch.Condition = ReplaceKnownConstants(branch.Condition, knownConstants);
                         if (TryGetTruthiness(branch.Condition, out var condition))

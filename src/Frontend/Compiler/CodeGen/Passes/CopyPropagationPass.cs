@@ -121,6 +121,87 @@ public sealed class CopyPropagationPass : IIrOptimizationPass
                 break;
             }
 
+            case IrPrintInstruction print:
+            {
+                if (TryResolveValue(print.Value, temporaryCopies, variableCopies, out var printValue))
+                {
+                    print.Value = printValue;
+                    changed = true;
+                }
+
+                break;
+            }
+
+            case IrThrowInstruction throwInstruction:
+            {
+                if (throwInstruction.Error is not null
+                    && TryResolveValue(throwInstruction.Error, temporaryCopies, variableCopies, out var throwValue))
+                {
+                    throwInstruction.Error = throwValue;
+                    changed = true;
+                }
+
+                if (throwInstruction.Detail is not null
+                    && TryResolveValue(throwInstruction.Detail, temporaryCopies, variableCopies, out var throwDetail))
+                {
+                    throwInstruction.Detail = throwDetail;
+                    changed = true;
+                }
+
+                break;
+            }
+
+            case IrArrayCreateInstruction arrayCreate:
+            {
+                if (TryResolveValue(arrayCreate.Length, temporaryCopies, variableCopies, out var arrayLength))
+                {
+                    arrayCreate.Length = arrayLength;
+                    changed = true;
+                }
+
+                break;
+            }
+
+            case IrArrayGetInstruction arrayGet:
+            {
+                if (TryResolveValue(arrayGet.Array, temporaryCopies, variableCopies, out var arrayTarget))
+                {
+                    arrayGet.Array = arrayTarget;
+                    changed = true;
+                }
+
+                if (TryResolveValue(arrayGet.Index, temporaryCopies, variableCopies, out var arrayIndex))
+                {
+                    arrayGet.Index = arrayIndex;
+                    changed = true;
+                }
+
+                break;
+            }
+
+            case IrArraySetInstruction arraySet:
+            {
+                if (TryResolveValue(arraySet.Array, temporaryCopies, variableCopies, out var arrayValue))
+                {
+                    arraySet.Array = arrayValue;
+                    changed = true;
+                }
+
+                if (TryResolveValue(arraySet.Index, temporaryCopies, variableCopies, out var indexValue))
+                {
+                    arraySet.Index = indexValue;
+                    changed = true;
+                }
+
+                if (TryResolveValue(arraySet.Value, temporaryCopies, variableCopies, out var setValue))
+                {
+                    arraySet.Value = setValue;
+                    changed = true;
+                }
+
+                break;
+            }
+
             case IrReturnInstruction ret when ret.Value is not null:
             {
                 if (TryResolveValue(ret.Value, temporaryCopies, variableCopies, out var returnValue))

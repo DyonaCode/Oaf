@@ -13,12 +13,22 @@ public static class ParserTests
             ("recovers_after_missing_semicolon", RecoversAfterMissingSemicolon),
             ("parses_type_declarations", ParsesTypeDeclarations),
             ("parses_typed_variable_declaration", ParsesTypedVariableDeclaration),
+            ("parses_constructor_expression_with_bracket_arguments", ParsesConstructorExpressionWithBracketArguments),
             ("parses_explicit_cast_expression", ParsesExplicitCastExpression),
             ("keeps_parenthesized_expression_distinct_from_cast", KeepsParenthesizedExpressionDistinctFromCast),
             ("parses_arrow_body_without_double_semicolon", ParsesArrowBodyWithoutDoubleSemicolon),
             ("parses_brace_block_arrow_body", ParsesBraceBlockArrowBody),
             ("accepts_legacy_double_semicolon_terminator", AcceptsLegacyDoubleSemicolonTerminator),
+            ("parses_if_comma_separated_conditions", ParsesIfCommaSeparatedConditions),
+            ("parses_jot_statement", ParsesJotStatement),
+            ("parses_throw_statement", ParsesThrowStatement),
+            ("parses_gc_statement", ParsesGcStatement),
+            ("parses_match_statement", ParsesMatchStatement),
+            ("parses_array_type_and_array_literal", ParsesArrayTypeAndArrayLiteral),
+            ("parses_index_expression_and_indexed_assignment", ParsesIndexExpressionAndIndexedAssignment),
             ("parses_module_and_import_statements", ParsesModuleAndImportStatements),
+            ("parses_string_literal_import_statement", ParsesStringLiteralImportStatement),
+            ("parses_public_class_declaration_with_modifiers", ParsesPublicClassDeclarationWithModifiers),
             ("parses_qualified_identifier_expressions", ParsesQualifiedIdentifierExpressions)
         ];
     }
@@ -75,6 +85,24 @@ public static class ParserTests
         TestAssertions.True(declaration is not null, "Expected typed variable declaration.");
         TestAssertions.True(declaration!.DeclaredType is not null, "Expected declared type to be captured.");
         TestAssertions.Equal("int", declaration.DeclaredType!.Name);
+    }
+
+    private static void ParsesConstructorExpressionWithBracketArguments()
+    {
+        const string source = "struct Point [int x, int y]; start = Point[0, 0];";
+        var parser = new Frontend.Compiler.Parser.Parser(source);
+        var unit = parser.ParseCompilationUnit();
+
+        TestAssertions.False(parser.Diagnostics.HasErrors);
+        TestAssertions.Equal(2, unit.Statements.Count);
+
+        var declaration = unit.Statements[1] as VariableDeclarationStatementSyntax;
+        TestAssertions.True(declaration is not null, "Expected variable declaration.");
+        TestAssertions.True(declaration!.Initializer is ConstructorExpressionSyntax, "Expected constructor expression initializer.");
+
+        var constructor = (ConstructorExpressionSyntax)declaration.Initializer;
+        TestAssertions.Equal("Point", constructor.TargetType.Name);
+        TestAssertions.Equal(2, constructor.Arguments.Count);
     }
 
     private static void ParsesExplicitCastExpression()
@@ -143,6 +171,110 @@ public static class ParserTests
         TestAssertions.Equal(2, unit.Statements.Count);
     }
 
+    private static void ParsesIfCommaSeparatedConditions()
+    {
+        const string source = "if 1 < 2, 3 < 4 => return 1; -> return 0;";
+        var parser = new Frontend.Compiler.Parser.Parser(source);
+        var unit = parser.ParseCompilationUnit();
+
+        TestAssertions.False(parser.Diagnostics.HasErrors, "Expected comma-separated if conditions to parse.");
+        TestAssertions.Equal(1, unit.Statements.Count);
+
+        var ifStatement = unit.Statements[0] as IfStatementSyntax;
+        TestAssertions.True(ifStatement is not null, "Expected if statement.");
+        TestAssertions.True(ifStatement!.Condition is BinaryExpressionSyntax, "Expected lowered logical-and condition.");
+
+        var combined = (BinaryExpressionSyntax)ifStatement.Condition;
+        TestAssertions.Equal(Frontend.Compiler.Lexer.TokenKind.DoubleAmpersandToken, combined.OperatorKind);
+    }
+
+    private static void ParsesJotStatement()
+    {
+        const string source = "flux x = 4; Jot(x + 1); return x;";
+        var parser = new Frontend.Compiler.Parser.Parser(source);
+        var unit = parser.ParseCompilationUnit();
+
+        TestAssertions.False(parser.Diagnostics.HasErrors, "Expected Jot statement to parse.");
+        TestAssertions.Equal(3, unit.Statements.Count);
+        TestAssertions.True(unit.Statements[1] is JotStatementSyntax, "Expected second statement to be Jot.");
+    }
+
+    private static void ParsesThrowStatement()
+    {
+        const string source = "throw \"OperationFailed\", \"Division by zero\";";
+        var parser = new Frontend.Compiler.Parser.Parser(source);
+        var unit = parser.ParseCompilationUnit();
+
+        TestAssertions.False(parser.Diagnostics.HasErrors, "Expected throw statement to parse.");
+        TestAssertions.Equal(1, unit.Statements.Count);
+        var throwStatement = unit.Statements[0] as ThrowStatementSyntax;
+        TestAssertions.True(throwStatement is not null, "Expected throw statement.");
+        TestAssertions.True(throwStatement!.ErrorExpression is not null, "Expected throw error expression.");
+        TestAssertions.True(throwStatement.DetailExpression is not null, "Expected throw detail expression.");
+    }
+
+    private static void ParsesGcStatement()
+    {
+        const string source = "gc => { flux x = 1; }";
+        var parser = new Frontend.Compiler.Parser.Parser(source);
+        var unit = parser.ParseCompilationUnit();
+
+        TestAssertions.False(parser.Diagnostics.HasErrors, "Expected gc statement to parse.");
+        TestAssertions.Equal(1, unit.Statements.Count);
+        var gcStatement = unit.Statements[0] as GcStatementSyntax;
+        TestAssertions.True(gcStatement is not null, "Expected gc statement.");
+        TestAssertions.True(gcStatement!.Body is BlockStatementSyntax, "Expected gc body block.");
+    }
+
+    private static void ParsesMatchStatement()
+    {
+        const string source = "flux value = 2; value match => 1 -> value = 10; 2 -> value = 20; -> value = 0;;; return value;";
+        var parser = new Frontend.Compiler.Parser.Parser(source);
+        var unit = parser.ParseCompilationUnit();
+
+        TestAssertions.False(parser.Diagnostics.HasErrors, "Expected match statement to parse.");
+        TestAssertions.Equal(3, unit.Statements.Count);
+        var matchStatement = unit.Statements[1] as MatchStatementSyntax;
+        TestAssertions.True(matchStatement is not null, "Expected match statement.");
+        TestAssertions.Equal(3, matchStatement!.Arms.Count);
+        TestAssertions.True(matchStatement.Arms[2].Pattern is null, "Expected third arm to be default.");
+    }
+
+    private static void ParsesArrayTypeAndArrayLiteral()
+    {
+        const string source = "[int] values = [1, 2, 3];";
+        var parser = new Frontend.Compiler.Parser.Parser(source);
+        var unit = parser.ParseCompilationUnit();
+
+        TestAssertions.False(parser.Diagnostics.HasErrors, "Expected array type declaration and literal to parse.");
+        TestAssertions.Equal(1, unit.Statements.Count);
+        var declaration = unit.Statements[0] as VariableDeclarationStatementSyntax;
+        TestAssertions.True(declaration is not null, "Expected typed variable declaration.");
+        TestAssertions.True(declaration!.DeclaredType is not null, "Expected declared type.");
+        TestAssertions.Equal("array", declaration.DeclaredType!.Name);
+        TestAssertions.Equal(1, declaration.DeclaredType.TypeArguments.Count);
+        TestAssertions.Equal("int", declaration.DeclaredType.TypeArguments[0].Name);
+        TestAssertions.True(declaration.Initializer is ArrayLiteralExpressionSyntax, "Expected array literal initializer.");
+    }
+
+    private static void ParsesIndexExpressionAndIndexedAssignment()
+    {
+        const string source = "flux values = [1, 2, 3]; values[1] = 7; return values[1];";
+        var parser = new Frontend.Compiler.Parser.Parser(source);
+        var unit = parser.ParseCompilationUnit();
+
+        TestAssertions.False(parser.Diagnostics.HasErrors, "Expected index syntax to parse.");
+        TestAssertions.Equal(3, unit.Statements.Count);
+        TestAssertions.True(unit.Statements[1] is IndexedAssignmentStatementSyntax, "Expected indexed assignment statement.");
+
+        var indexedAssignment = (IndexedAssignmentStatementSyntax)unit.Statements[1];
+        TestAssertions.True(indexedAssignment.Target is IndexExpressionSyntax, "Expected indexed assignment target expression.");
+
+        var returnStatement = unit.Statements[2] as ReturnStatementSyntax;
+        TestAssertions.True(returnStatement is not null, "Expected return statement.");
+        TestAssertions.True(returnStatement!.Expression is IndexExpressionSyntax, "Expected indexed return expression.");
+    }
+
     private static void ParsesModuleAndImportStatements()
     {
         const string source = "module pkg.math; import pkg.core; flux x = 1;";
@@ -158,6 +290,32 @@ public static class ParserTests
         var import = unit.Statements[1] as ImportStatementSyntax;
         TestAssertions.Equal("pkg.math", module!.ModuleName);
         TestAssertions.Equal("pkg.core", import!.ModuleName);
+    }
+
+    private static void ParsesStringLiteralImportStatement()
+    {
+        const string source = "module pkg.math; import \"github.com/user/package/v1\"; flux x = 1;";
+        var parser = new Frontend.Compiler.Parser.Parser(source);
+        var unit = parser.ParseCompilationUnit();
+
+        TestAssertions.False(parser.Diagnostics.HasErrors, "Expected string literal import to parse.");
+        TestAssertions.Equal(3, unit.Statements.Count);
+        var import = unit.Statements[1] as ImportStatementSyntax;
+        TestAssertions.True(import is not null, "Expected import statement.");
+        TestAssertions.Equal("github.com/user/package/v1", import!.ModuleName);
+    }
+
+    private static void ParsesPublicClassDeclarationWithModifiers()
+    {
+        const string source = "public class Program public, gcoff;";
+        var parser = new Frontend.Compiler.Parser.Parser(source);
+        var unit = parser.ParseCompilationUnit();
+
+        TestAssertions.False(parser.Diagnostics.HasErrors, "Expected public class with modifiers to parse.");
+        TestAssertions.Equal(1, unit.Statements.Count);
+        TestAssertions.True(unit.Statements[0] is ClassDeclarationStatementSyntax, "Expected class declaration.");
+        var classDeclaration = (ClassDeclarationStatementSyntax)unit.Statements[0];
+        TestAssertions.Equal("Program", classDeclaration.Name);
     }
 
     private static void ParsesQualifiedIdentifierExpressions()
