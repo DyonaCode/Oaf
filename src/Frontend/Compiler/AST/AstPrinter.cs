@@ -28,6 +28,16 @@ public static class AstPrinter
                 builder.Append(" ");
                 builder.Append(name.Identifier);
                 break;
+            case ConstructorExpressionSyntax constructor:
+                builder.Append(" ");
+                builder.Append(TypeToText(constructor.TargetType));
+                break;
+            case ArrayLiteralExpressionSyntax:
+                builder.Append(" array");
+                break;
+            case IndexExpressionSyntax:
+                builder.Append(" index");
+                break;
             case CastExpressionSyntax cast:
                 builder.Append(" ");
                 builder.Append(TypeToText(cast.TargetType));
@@ -48,6 +58,21 @@ public static class AstPrinter
                 builder.Append(" ");
                 builder.Append(TokenToText(assignment.OperatorKind));
                 break;
+            case MatchStatementSyntax:
+                builder.Append(" match");
+                break;
+            case MatchArmSyntax arm when arm.Pattern is null:
+                builder.Append(" default");
+                break;
+            case MatchArmSyntax:
+                builder.Append(" arm");
+                break;
+            case ThrowStatementSyntax:
+                builder.Append(" throw");
+                break;
+            case GcStatementSyntax:
+                builder.Append(" gc");
+                break;
             case UnaryExpressionSyntax unary:
                 builder.Append(" ");
                 builder.Append(TokenToText(unary.OperatorKind));
@@ -64,6 +89,9 @@ public static class AstPrinter
                     builder.Append(loop.IterationVariable);
                 }
 
+                break;
+            case JotStatementSyntax:
+                builder.Append(" Jot");
                 break;
             case ModuleDeclarationStatementSyntax moduleDeclaration:
                 builder.Append(" ");
@@ -119,10 +147,20 @@ public static class AstPrinter
             VariableDeclarationStatementSyntax declaration when declaration.DeclaredType is not null => [declaration.DeclaredType, declaration.Initializer],
             VariableDeclarationStatementSyntax declaration => [declaration.Initializer],
             AssignmentStatementSyntax assignment => [assignment.Expression],
+            IndexedAssignmentStatementSyntax indexedAssignment => [indexedAssignment.Target, indexedAssignment.Expression],
+            MatchStatementSyntax matchStatement => [matchStatement.Expression, .. matchStatement.Arms],
+            MatchArmSyntax arm when arm.Pattern is not null => [arm.Pattern, arm.Body],
+            MatchArmSyntax arm => [arm.Body],
+            ThrowStatementSyntax throwStatement when throwStatement.ErrorExpression is not null && throwStatement.DetailExpression is not null
+                => [throwStatement.ErrorExpression, throwStatement.DetailExpression],
+            ThrowStatementSyntax throwStatement when throwStatement.ErrorExpression is not null
+                => [throwStatement.ErrorExpression],
+            GcStatementSyntax gcStatement => [gcStatement.Body],
             ReturnStatementSyntax returnStatement when returnStatement.Expression is not null => [returnStatement.Expression],
             IfStatementSyntax ifStatement when ifStatement.ElseStatement is not null => [ifStatement.Condition, ifStatement.ThenStatement, ifStatement.ElseStatement],
             IfStatementSyntax ifStatement => [ifStatement.Condition, ifStatement.ThenStatement],
             LoopStatementSyntax loop => [loop.IteratorOrCondition, loop.Body],
+            JotStatementSyntax jotStatement => [jotStatement.Expression],
             ModuleDeclarationStatementSyntax => [],
             ImportStatementSyntax => [],
             StructDeclarationStatementSyntax structDeclaration => structDeclaration.Fields,
@@ -131,6 +169,9 @@ public static class AstPrinter
             FieldDeclarationSyntax field => [field.Type],
             EnumVariantSyntax enumVariant when enumVariant.PayloadType is not null => [enumVariant.PayloadType],
             TypeReferenceSyntax typeReference => typeReference.TypeArguments,
+            ConstructorExpressionSyntax constructor => [constructor.TargetType, .. constructor.Arguments],
+            ArrayLiteralExpressionSyntax arrayLiteral => arrayLiteral.Elements,
+            IndexExpressionSyntax indexExpression => [indexExpression.Target, indexExpression.Index],
             CastExpressionSyntax cast => [cast.TargetType, cast.Expression],
             UnaryExpressionSyntax unary => [unary.Operand],
             BinaryExpressionSyntax binary => [binary.Left, binary.Right],

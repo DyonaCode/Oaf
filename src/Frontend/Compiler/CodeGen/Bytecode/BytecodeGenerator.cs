@@ -21,6 +21,8 @@ public sealed class BytecodeGenerator
 
         public List<LabelFixup> Fixups { get; } = new();
 
+        public Stack<int> ParallelForBeginStack { get; } = new();
+
         public int NextSlot { get; set; }
     }
 
@@ -201,6 +203,261 @@ public sealed class BytecodeGenerator
                     break;
                 }
 
+            case IrPrintInstruction print:
+                {
+                    var value = MaterializeOperand(print.Value, context);
+                    context.Function.Instructions.Add(new BytecodeInstruction(BytecodeOpCode.Print, value));
+                    break;
+                }
+
+            case IrHttpGetInstruction httpGet:
+                {
+                    var destination = GetSlot(httpGet.Destination, context);
+                    var url = MaterializeOperand(httpGet.Url, context);
+                    context.Function.Instructions.Add(new BytecodeInstruction(BytecodeOpCode.HttpGet, destination, url));
+                    break;
+                }
+
+            case IrHttpSendInstruction httpSend:
+                {
+                    var destination = GetSlot(httpSend.Destination, context);
+                    var url = MaterializeOperand(httpSend.Url, context);
+                    var method = MaterializeOperand(httpSend.Method, context);
+                    var body = MaterializeOperand(httpSend.Body, context);
+                    var timeoutMs = MaterializeOperand(httpSend.TimeoutMs, context);
+                    var headers = MaterializeOperand(httpSend.Headers, context);
+                    context.Function.Instructions.Add(new BytecodeInstruction(BytecodeOpCode.HttpSend, destination, url, method, body, timeoutMs, headers));
+                    break;
+                }
+
+            case IrHttpHeaderInstruction httpHeader:
+                {
+                    var destination = GetSlot(httpHeader.Destination, context);
+                    var headers = MaterializeOperand(httpHeader.Headers, context);
+                    var name = MaterializeOperand(httpHeader.Name, context);
+                    var value = MaterializeOperand(httpHeader.Value, context);
+                    context.Function.Instructions.Add(new BytecodeInstruction(BytecodeOpCode.HttpHeader, destination, headers, name, value));
+                    break;
+                }
+
+            case IrHttpQueryInstruction httpQuery:
+                {
+                    var destination = GetSlot(httpQuery.Destination, context);
+                    var url = MaterializeOperand(httpQuery.Url, context);
+                    var key = MaterializeOperand(httpQuery.Key, context);
+                    var value = MaterializeOperand(httpQuery.Value, context);
+                    context.Function.Instructions.Add(new BytecodeInstruction(BytecodeOpCode.HttpQuery, destination, url, key, value));
+                    break;
+                }
+
+            case IrHttpUrlEncodeInstruction httpUrlEncode:
+                {
+                    var destination = GetSlot(httpUrlEncode.Destination, context);
+                    var value = MaterializeOperand(httpUrlEncode.Value, context);
+                    context.Function.Instructions.Add(new BytecodeInstruction(BytecodeOpCode.HttpUrlEncode, destination, value));
+                    break;
+                }
+
+            case IrHttpClientOpenInstruction httpClientOpen:
+                {
+                    var destination = GetSlot(httpClientOpen.Destination, context);
+                    var baseUrl = MaterializeOperand(httpClientOpen.BaseUrl, context);
+                    context.Function.Instructions.Add(new BytecodeInstruction(BytecodeOpCode.HttpClientOpen, destination, baseUrl));
+                    break;
+                }
+
+            case IrHttpClientConfigureInstruction httpClientConfigure:
+                {
+                    var destination = GetSlot(httpClientConfigure.Destination, context);
+                    var client = MaterializeOperand(httpClientConfigure.Client, context);
+                    var timeoutMs = MaterializeOperand(httpClientConfigure.TimeoutMs, context);
+                    var allowRedirects = MaterializeOperand(httpClientConfigure.AllowRedirects, context);
+                    var maxRedirects = MaterializeOperand(httpClientConfigure.MaxRedirects, context);
+                    var userAgent = MaterializeOperand(httpClientConfigure.UserAgent, context);
+                    context.Function.Instructions.Add(new BytecodeInstruction(BytecodeOpCode.HttpClientConfigure, destination, client, timeoutMs, allowRedirects, maxRedirects, userAgent));
+                    break;
+                }
+
+            case IrHttpClientConfigureRetryInstruction httpClientConfigureRetry:
+                {
+                    var destination = GetSlot(httpClientConfigureRetry.Destination, context);
+                    var client = MaterializeOperand(httpClientConfigureRetry.Client, context);
+                    var maxRetries = MaterializeOperand(httpClientConfigureRetry.MaxRetries, context);
+                    var retryDelayMs = MaterializeOperand(httpClientConfigureRetry.RetryDelayMs, context);
+                    context.Function.Instructions.Add(new BytecodeInstruction(BytecodeOpCode.HttpClientConfigureRetry, destination, client, maxRetries, retryDelayMs));
+                    break;
+                }
+
+            case IrHttpClientConfigureProxyInstruction httpClientConfigureProxy:
+                {
+                    var destination = GetSlot(httpClientConfigureProxy.Destination, context);
+                    var client = MaterializeOperand(httpClientConfigureProxy.Client, context);
+                    var proxyUrl = MaterializeOperand(httpClientConfigureProxy.ProxyUrl, context);
+                    context.Function.Instructions.Add(new BytecodeInstruction(BytecodeOpCode.HttpClientConfigureProxy, destination, client, proxyUrl));
+                    break;
+                }
+
+            case IrHttpClientDefaultHeadersInstruction httpClientDefaultHeaders:
+                {
+                    var destination = GetSlot(httpClientDefaultHeaders.Destination, context);
+                    var client = MaterializeOperand(httpClientDefaultHeaders.Client, context);
+                    var headers = MaterializeOperand(httpClientDefaultHeaders.Headers, context);
+                    context.Function.Instructions.Add(new BytecodeInstruction(BytecodeOpCode.HttpClientDefaultHeaders, destination, client, headers));
+                    break;
+                }
+
+            case IrHttpClientSendInstruction httpClientSend:
+                {
+                    var destination = GetSlot(httpClientSend.Destination, context);
+                    var client = MaterializeOperand(httpClientSend.Client, context);
+                    var pathOrUrl = MaterializeOperand(httpClientSend.PathOrUrl, context);
+                    var method = MaterializeOperand(httpClientSend.Method, context);
+                    var body = MaterializeOperand(httpClientSend.Body, context);
+                    var headers = MaterializeOperand(httpClientSend.Headers, context);
+                    context.Function.Instructions.Add(new BytecodeInstruction(BytecodeOpCode.HttpClientSend, destination, client, pathOrUrl, method, body, headers));
+                    break;
+                }
+
+            case IrHttpClientCloseInstruction httpClientClose:
+                {
+                    var destination = GetSlot(httpClientClose.Destination, context);
+                    var client = MaterializeOperand(httpClientClose.Client, context);
+                    context.Function.Instructions.Add(new BytecodeInstruction(BytecodeOpCode.HttpClientClose, destination, client));
+                    break;
+                }
+
+            case IrHttpClientRequestsSentInstruction httpClientRequestsSent:
+                {
+                    var destination = GetSlot(httpClientRequestsSent.Destination, context);
+                    var client = MaterializeOperand(httpClientRequestsSent.Client, context);
+                    context.Function.Instructions.Add(new BytecodeInstruction(BytecodeOpCode.HttpClientRequestsSent, destination, client));
+                    break;
+                }
+
+            case IrHttpClientRetriesUsedInstruction httpClientRetriesUsed:
+                {
+                    var destination = GetSlot(httpClientRetriesUsed.Destination, context);
+                    var client = MaterializeOperand(httpClientRetriesUsed.Client, context);
+                    context.Function.Instructions.Add(new BytecodeInstruction(BytecodeOpCode.HttpClientRetriesUsed, destination, client));
+                    break;
+                }
+
+            case IrHttpLastBodyInstruction httpLastBody:
+                {
+                    var destination = GetSlot(httpLastBody.Destination, context);
+                    context.Function.Instructions.Add(new BytecodeInstruction(BytecodeOpCode.HttpLastBody, destination));
+                    break;
+                }
+
+            case IrHttpLastStatusInstruction httpLastStatus:
+                {
+                    var destination = GetSlot(httpLastStatus.Destination, context);
+                    context.Function.Instructions.Add(new BytecodeInstruction(BytecodeOpCode.HttpLastStatus, destination));
+                    break;
+                }
+
+            case IrHttpLastErrorInstruction httpLastError:
+                {
+                    var destination = GetSlot(httpLastError.Destination, context);
+                    context.Function.Instructions.Add(new BytecodeInstruction(BytecodeOpCode.HttpLastError, destination));
+                    break;
+                }
+
+            case IrHttpLastReasonInstruction httpLastReason:
+                {
+                    var destination = GetSlot(httpLastReason.Destination, context);
+                    context.Function.Instructions.Add(new BytecodeInstruction(BytecodeOpCode.HttpLastReason, destination));
+                    break;
+                }
+
+            case IrHttpLastContentTypeInstruction httpLastContentType:
+                {
+                    var destination = GetSlot(httpLastContentType.Destination, context);
+                    context.Function.Instructions.Add(new BytecodeInstruction(BytecodeOpCode.HttpLastContentType, destination));
+                    break;
+                }
+
+            case IrHttpLastHeadersInstruction httpLastHeaders:
+                {
+                    var destination = GetSlot(httpLastHeaders.Destination, context);
+                    context.Function.Instructions.Add(new BytecodeInstruction(BytecodeOpCode.HttpLastHeaders, destination));
+                    break;
+                }
+
+            case IrHttpLastHeaderInstruction httpLastHeader:
+                {
+                    var destination = GetSlot(httpLastHeader.Destination, context);
+                    var headerName = MaterializeOperand(httpLastHeader.HeaderName, context);
+                    context.Function.Instructions.Add(new BytecodeInstruction(BytecodeOpCode.HttpLastHeader, destination, headerName));
+                    break;
+                }
+
+            case IrThrowInstruction throwInstruction:
+                {
+                    var error = throwInstruction.Error is null ? -1 : MaterializeOperand(throwInstruction.Error, context);
+                    var detail = throwInstruction.Detail is null ? -1 : MaterializeOperand(throwInstruction.Detail, context);
+                    context.Function.Instructions.Add(new BytecodeInstruction(BytecodeOpCode.Throw, error, detail));
+                    break;
+                }
+
+            case IrArrayCreateInstruction arrayCreate:
+                {
+                    var destination = GetSlot(arrayCreate.Destination, context);
+                    var length = MaterializeOperand(arrayCreate.Length, context);
+                    context.Function.Instructions.Add(new BytecodeInstruction(BytecodeOpCode.ArrayCreate, destination, length));
+                    break;
+                }
+
+            case IrArrayGetInstruction arrayGet:
+                {
+                    var destination = GetSlot(arrayGet.Destination, context);
+                    var array = MaterializeOperand(arrayGet.Array, context);
+                    var index = MaterializeOperand(arrayGet.Index, context);
+                    context.Function.Instructions.Add(new BytecodeInstruction(BytecodeOpCode.ArrayGet, destination, array, index));
+                    break;
+                }
+
+            case IrArraySetInstruction arraySet:
+                {
+                    var array = MaterializeOperand(arraySet.Array, context);
+                    var index = MaterializeOperand(arraySet.Index, context);
+                    var value = MaterializeOperand(arraySet.Value, context);
+                    context.Function.Instructions.Add(new BytecodeInstruction(BytecodeOpCode.ArraySet, array, index, value));
+                    break;
+                }
+
+            case IrParallelForBeginInstruction parallelBegin:
+                {
+                    var count = MaterializeOperand(parallelBegin.Count, context);
+                    var iterationSlot = GetSlot(parallelBegin.IterationVariable, context);
+                    var beginIndex = context.Function.Instructions.Count;
+                    context.Function.Instructions.Add(new BytecodeInstruction(BytecodeOpCode.ParallelForBegin, count, iterationSlot, -1));
+                    context.ParallelForBeginStack.Push(beginIndex);
+                    break;
+                }
+
+            case IrParallelForEndInstruction:
+                {
+                    var endIndex = context.Function.Instructions.Count;
+                    context.Function.Instructions.Add(new BytecodeInstruction(BytecodeOpCode.ParallelForEnd));
+
+                    if (context.ParallelForBeginStack.Count > 0)
+                    {
+                        var beginIndex = context.ParallelForBeginStack.Pop();
+                        context.Function.Instructions[beginIndex].C = endIndex;
+                    }
+
+                    break;
+                }
+
+            case IrParallelReduceAddInstruction parallelReduceAdd:
+                {
+                    var target = GetSlot(parallelReduceAdd.Target, context);
+                    var value = MaterializeOperand(parallelReduceAdd.Value, context);
+                    context.Function.Instructions.Add(new BytecodeInstruction(BytecodeOpCode.ParallelReduceAdd, target, value));
+                    break;
+                }
+
             case IrBranchInstruction branch:
                 {
                     var condition = MaterializeOperand(branch.Condition, context);
@@ -265,6 +522,12 @@ public sealed class BytecodeGenerator
                     instruction.D = target;
                     break;
             }
+        }
+
+        while (context.ParallelForBeginStack.Count > 0)
+        {
+            var beginIndex = context.ParallelForBeginStack.Pop();
+            context.Function.Instructions[beginIndex].C = context.Function.Instructions.Count;
         }
     }
 
@@ -384,6 +647,10 @@ public sealed class BytecodeGenerator
                 case BytecodeOpCode.JumpIfBinaryIntConstRightTrue:
                     instruction.D = RemapJumpTarget(instruction.D, oldToNewIndex, oldCount, newInstructions.Count);
                     break;
+
+                case BytecodeOpCode.ParallelForBegin:
+                    instruction.C = RemapJumpTarget(instruction.C, oldToNewIndex, oldCount, newInstructions.Count);
+                    break;
             }
         }
 
@@ -423,7 +690,9 @@ public sealed class BytecodeGenerator
             or BytecodeOpCode.Binary
             or BytecodeOpCode.BinaryInt
             or BytecodeOpCode.BinaryIntConstRight
-            or BytecodeOpCode.Cast;
+            or BytecodeOpCode.Cast
+            or BytecodeOpCode.ArrayCreate
+            or BytecodeOpCode.ArrayGet;
     }
 
     private static bool IsSlotReadAfter(IReadOnlyList<BytecodeInstruction> instructions, int slot, int startIndex)
@@ -450,6 +719,28 @@ public sealed class BytecodeGenerator
             BytecodeOpCode.BinaryInt => instruction.C == slot || instruction.D == slot,
             BytecodeOpCode.BinaryIntConstRight => instruction.C == slot,
             BytecodeOpCode.Cast => instruction.B == slot,
+            BytecodeOpCode.Print => instruction.A == slot,
+            BytecodeOpCode.HttpGet => instruction.B == slot,
+            BytecodeOpCode.HttpSend => instruction.B == slot || instruction.C == slot || instruction.D == slot || instruction.E == slot || instruction.F == slot,
+            BytecodeOpCode.HttpHeader => instruction.B == slot || instruction.C == slot || instruction.D == slot,
+            BytecodeOpCode.HttpQuery => instruction.B == slot || instruction.C == slot || instruction.D == slot,
+            BytecodeOpCode.HttpUrlEncode => instruction.B == slot,
+            BytecodeOpCode.HttpClientOpen => instruction.B == slot,
+            BytecodeOpCode.HttpClientConfigure => instruction.B == slot || instruction.C == slot || instruction.D == slot || instruction.E == slot || instruction.F == slot,
+            BytecodeOpCode.HttpClientConfigureRetry => instruction.B == slot || instruction.C == slot || instruction.D == slot,
+            BytecodeOpCode.HttpClientConfigureProxy => instruction.B == slot || instruction.C == slot,
+            BytecodeOpCode.HttpClientDefaultHeaders => instruction.B == slot || instruction.C == slot,
+            BytecodeOpCode.HttpClientSend => instruction.B == slot || instruction.C == slot || instruction.D == slot || instruction.E == slot || instruction.F == slot,
+            BytecodeOpCode.HttpClientClose => instruction.B == slot,
+            BytecodeOpCode.HttpClientRequestsSent => instruction.B == slot,
+            BytecodeOpCode.HttpClientRetriesUsed => instruction.B == slot,
+            BytecodeOpCode.HttpLastHeader => instruction.B == slot,
+            BytecodeOpCode.Throw => instruction.A == slot || instruction.B == slot,
+            BytecodeOpCode.ArrayCreate => instruction.B == slot,
+            BytecodeOpCode.ArrayGet => instruction.B == slot || instruction.C == slot,
+            BytecodeOpCode.ArraySet => instruction.A == slot || instruction.B == slot || instruction.C == slot,
+            BytecodeOpCode.ParallelForBegin => instruction.A == slot,
+            BytecodeOpCode.ParallelReduceAdd => instruction.A == slot || instruction.B == slot,
             BytecodeOpCode.JumpIfTrue or BytecodeOpCode.JumpIfFalse => instruction.A == slot,
             BytecodeOpCode.JumpIfBinaryIntTrue => instruction.A == slot || instruction.B == slot,
             BytecodeOpCode.JumpIfBinaryIntConstRightTrue => instruction.A == slot,

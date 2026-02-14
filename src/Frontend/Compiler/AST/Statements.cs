@@ -69,6 +69,86 @@ public sealed class AssignmentStatementSyntax : StatementSyntax
     public override SyntaxNodeKind Kind => SyntaxNodeKind.AssignmentStatement;
 }
 
+public sealed class IndexedAssignmentStatementSyntax : StatementSyntax
+{
+    public IndexedAssignmentStatementSyntax(ExpressionSyntax target, TokenKind operatorKind, ExpressionSyntax expression, SourceSpan span)
+        : base(span)
+    {
+        Target = target;
+        OperatorKind = operatorKind;
+        Expression = expression;
+    }
+
+    public ExpressionSyntax Target { get; }
+
+    public TokenKind OperatorKind { get; }
+
+    public ExpressionSyntax Expression { get; }
+
+    public override SyntaxNodeKind Kind => SyntaxNodeKind.IndexedAssignmentStatement;
+}
+
+public sealed class MatchArmSyntax : SyntaxNode
+{
+    public MatchArmSyntax(ExpressionSyntax? pattern, StatementSyntax body, SourceSpan span)
+        : base(span)
+    {
+        Pattern = pattern;
+        Body = body;
+    }
+
+    public ExpressionSyntax? Pattern { get; }
+
+    public StatementSyntax Body { get; }
+
+    public override SyntaxNodeKind Kind => SyntaxNodeKind.MatchArm;
+}
+
+public sealed class MatchStatementSyntax : StatementSyntax
+{
+    public MatchStatementSyntax(ExpressionSyntax expression, IReadOnlyList<MatchArmSyntax> arms, SourceSpan span)
+        : base(span)
+    {
+        Expression = expression;
+        Arms = arms;
+    }
+
+    public ExpressionSyntax Expression { get; }
+
+    public IReadOnlyList<MatchArmSyntax> Arms { get; }
+
+    public override SyntaxNodeKind Kind => SyntaxNodeKind.MatchStatement;
+}
+
+public sealed class ThrowStatementSyntax : StatementSyntax
+{
+    public ThrowStatementSyntax(ExpressionSyntax? errorExpression, ExpressionSyntax? detailExpression, SourceSpan span)
+        : base(span)
+    {
+        ErrorExpression = errorExpression;
+        DetailExpression = detailExpression;
+    }
+
+    public ExpressionSyntax? ErrorExpression { get; }
+
+    public ExpressionSyntax? DetailExpression { get; }
+
+    public override SyntaxNodeKind Kind => SyntaxNodeKind.ThrowStatement;
+}
+
+public sealed class GcStatementSyntax : StatementSyntax
+{
+    public GcStatementSyntax(StatementSyntax body, SourceSpan span)
+        : base(span)
+    {
+        Body = body;
+    }
+
+    public StatementSyntax Body { get; }
+
+    public override SyntaxNodeKind Kind => SyntaxNodeKind.GcStatement;
+}
+
 public sealed class ReturnStatementSyntax : StatementSyntax
 {
     public ReturnStatementSyntax(ExpressionSyntax? expression, SourceSpan span)
@@ -141,6 +221,19 @@ public sealed class ContinueStatementSyntax : StatementSyntax
     }
 
     public override SyntaxNodeKind Kind => SyntaxNodeKind.ContinueStatement;
+}
+
+public sealed class JotStatementSyntax : StatementSyntax
+{
+    public JotStatementSyntax(ExpressionSyntax expression, SourceSpan span)
+        : base(span)
+    {
+        Expression = expression;
+    }
+
+    public ExpressionSyntax Expression { get; }
+
+    public override SyntaxNodeKind Kind => SyntaxNodeKind.JotStatement;
 }
 
 public sealed class ModuleDeclarationStatementSyntax : StatementSyntax

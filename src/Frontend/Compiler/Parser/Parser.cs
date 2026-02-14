@@ -60,9 +60,12 @@ public sealed class Parser
             TokenKind.LoopKeyword => ParseLoopStatement(isParallel: false),
             TokenKind.ParalloopKeyword => ParseLoopStatement(isParallel: true),
             TokenKind.ReturnKeyword => ParseReturnStatement(),
+            TokenKind.ThrowKeyword => ParseThrowStatement(),
+            TokenKind.GcKeyword => ParseGcStatement(),
             TokenKind.FluxKeyword => ParseFluxVariableDeclarationStatement(),
             TokenKind.BreakKeyword => ParseBreakStatement(),
             TokenKind.ContinueKeyword => ParseContinueStatement(),
+            TokenKind.PublicKeyword => ParsePublicDeclarationStatement(),
             TokenKind.StructKeyword => ParseStructDeclarationStatement(),
             TokenKind.ClassKeyword => ParseClassDeclarationStatement(),
             TokenKind.EnumKeyword => ParseEnumDeclarationStatement(),
@@ -72,9 +75,19 @@ public sealed class Parser
 
     private StatementSyntax ParseFallbackStatement()
     {
+        if (IsJotStatementAtCurrent())
+        {
+            return ParseJotStatement();
+        }
+
         if (IsTypedVariableDeclarationAtCurrent())
         {
             return ParseTypedVariableDeclarationStatement(isMutable: false, fallbackSpan: null);
+        }
+
+        if (IsIndexedAssignmentAtCurrent())
+        {
+            return ParseIndexedAssignmentStatement();
         }
 
         if (TryGetQualifiedIdentifierLengthAtCurrent(out var qualifiedLength))
@@ -101,7 +114,27 @@ public sealed class Parser
             }
         }
 
-        return ParseExpressionStatement();
+        return ParseExpressionOrMatchStatement();
+    }
+
+    private StatementSyntax ParsePublicDeclarationStatement()
+    {
+        var publicToken = Match(TokenKind.PublicKeyword, "Expected 'public'.");
+        return Current.Kind switch
+        {
+            TokenKind.ClassKeyword => ParseClassDeclarationStatement(),
+            TokenKind.StructKeyword => ParseStructDeclarationStatement(),
+            TokenKind.EnumKeyword => ParseEnumDeclarationStatement(),
+            _ => ParseInvalidPublicStatement(publicToken)
+        };
+    }
+
+    private StatementSyntax ParseInvalidPublicStatement(Token publicToken)
+    {
+        Diagnostics.ReportParserError("Expected 'class', 'struct', or 'enum' after 'public'.", Current);
+        var expression = ParseExpression();
+        Match(TokenKind.SemicolonToken, "Expected ';' after expression statement.");
+        return new ExpressionStatementSyntax(expression, SpanFrom(publicToken));
     }
 
     private StatementSyntax ParseModuleDeclarationStatement()
@@ -115,7 +148,18 @@ public sealed class Parser
     private StatementSyntax ParseImportStatement()
     {
         var importToken = Match(TokenKind.ImportKeyword, "Expected 'import'.");
-        var (moduleName, _) = ParseQualifiedIdentifier("Expected module name.");
+        string moduleName;
+        if (Current.Kind == TokenKind.StringToken && Current.Value is string importPath)
+        {
+            moduleName = importPath;
+            NextToken();
+        }
+        else
+        {
+            var parsed = ParseQualifiedIdentifier("Expected module name.");
+            moduleName = parsed.Name;
+        }
+
         Match(TokenKind.SemicolonToken, "Expected ';' after import statement.");
         return new ImportStatementSyntax(moduleName, SpanFrom(importToken));
     }
@@ -155,8 +199,34 @@ public sealed class Parser
             fields = ParseFieldList();
         }
 
+        ParseOptionalClassModifiers();
         Match(TokenKind.SemicolonToken, "Expected ';' after class declaration.");
         return new ClassDeclarationStatementSyntax(name, typeParameters, fields, SpanFrom(keyword));
+    }
+
+    private void ParseOptionalClassModifiers()
+    {
+        if (!IsClassModifierToken(Current.Kind))
+        {
+            return;
+        }
+
+        while (true)
+        {
+            if (!IsClassModifierToken(Current.Kind))
+            {
+                Diagnostics.ReportParserError("Expected class modifier identifier.", Current);
+                break;
+            }
+
+            NextToken();
+            if (Current.Kind != TokenKind.CommaToken)
+            {
+                break;
+            }
+
+            NextToken();
+        }
     }
 
     private StatementSyntax ParseEnumDeclarationStatement()
@@ -268,7 +338,7 @@ public sealed class Parser
     private StatementSyntax ParseIfStatement()
     {
         var ifToken = Match(TokenKind.IfKeyword, "Expected 'if'.");
-        var condition = ParseExpression();
+        var condition = ParseCommaSeparatedConditionExpression();
         Match(TokenKind.FatArrowToken, "Expected '=>' after if condition.");
 
         var thenStatement = ParseArrowBody(stopOnElseArrow: true);
@@ -282,6 +352,19 @@ public sealed class Parser
 
         ConsumeOptionalLegacyBlockTerminator();
         return new IfStatementSyntax(condition, thenStatement, elseStatement, SpanFrom(ifToken));
+    }
+
+    private ExpressionSyntax ParseCommaSeparatedConditionExpression()
+    {
+        var condition = ParseExpression();
+        while (Current.Kind == TokenKind.CommaToken)
+        {
+            var commaToken = Match(TokenKind.CommaToken, "Expected ',' in condition list.");
+            var nextCondition = ParseExpression();
+            condition = new BinaryExpressionSyntax(condition, TokenKind.DoubleAmpersandToken, nextCondition, SpanFrom(commaToken));
+        }
+
+        return condition;
     }
 
     private StatementSyntax ParseLoopStatement(bool isParallel)
@@ -388,6 +471,14 @@ public sealed class Parser
 
     private TypeReferenceSyntax ParseTypeReference()
     {
+        if (Current.Kind == TokenKind.OpenBracketToken)
+        {
+            var openBracket = Match(TokenKind.OpenBracketToken, "Expected '[' to start array type.");
+            var elementType = ParseTypeReference();
+            Match(TokenKind.CloseBracketToken, "Expected ']' to close array type.");
+            return new TypeReferenceSyntax("array", [elementType], SpanFrom(openBracket));
+        }
+
         var (name, nameSpan) = ParseQualifiedIdentifier("Expected type name.");
 
         if (Current.Kind != TokenKind.LessToken)
@@ -431,11 +522,75 @@ public sealed class Parser
         return new AssignmentStatementSyntax(identifier, assignmentToken.Kind, expression, span);
     }
 
-    private StatementSyntax ParseExpressionStatement()
+    private StatementSyntax ParseIndexedAssignmentStatement()
+    {
+        var target = ParsePrimaryExpression();
+        var assignmentToken = NextToken();
+
+        if (!IsAssignmentOperator(assignmentToken.Kind))
+        {
+            Diagnostics.ReportParserError("Expected assignment operator.", assignmentToken);
+            assignmentToken = new Token(TokenKind.EqualsToken, "=", null, assignmentToken.Line, assignmentToken.Column);
+        }
+
+        var expression = ParseExpression();
+        Match(TokenKind.SemicolonToken, "Expected ';' after assignment.");
+        return new IndexedAssignmentStatementSyntax(target, assignmentToken.Kind, expression, target.Span);
+    }
+
+    private StatementSyntax ParseExpressionOrMatchStatement()
     {
         var expression = ParseExpression();
+        if (Current.Kind == TokenKind.MatchKeyword)
+        {
+            return ParseMatchStatement(expression);
+        }
+
         Match(TokenKind.SemicolonToken, "Expected ';' after expression statement.");
         return new ExpressionStatementSyntax(expression, expression.Span);
+    }
+
+    private StatementSyntax ParseMatchStatement(ExpressionSyntax expression)
+    {
+        var matchToken = Match(TokenKind.MatchKeyword, "Expected 'match'.");
+        Match(TokenKind.FatArrowToken, "Expected '=>' after match keyword.");
+
+        var arms = new List<MatchArmSyntax>();
+        while (Current.Kind != TokenKind.EndOfFileToken
+               && !(Current.Kind == TokenKind.SemicolonToken && Peek(1).Kind == TokenKind.SemicolonToken))
+        {
+            var armStart = Current;
+            ExpressionSyntax? pattern = null;
+            if (Current.Kind == TokenKind.ArrowToken)
+            {
+                NextToken();
+            }
+            else
+            {
+                pattern = ParseExpression();
+                Match(TokenKind.ArrowToken, "Expected '->' after match pattern.");
+            }
+
+            var body = ParseArrowBody(stopOnElseArrow: false);
+            arms.Add(new MatchArmSyntax(pattern, body, pattern?.Span ?? SpanFrom(armStart)));
+        }
+
+        if (arms.Count == 0)
+        {
+            Diagnostics.ReportParserError("Match statement requires at least one arm.", matchToken);
+        }
+
+        if (Current.Kind == TokenKind.SemicolonToken && Peek(1).Kind == TokenKind.SemicolonToken)
+        {
+            NextToken();
+            NextToken();
+        }
+        else
+        {
+            Diagnostics.ReportParserError("Expected ';;' to close match statement.", Current);
+        }
+
+        return new MatchStatementSyntax(expression, arms, expression.Span);
     }
 
     private StatementSyntax ParseReturnStatement()
@@ -452,6 +607,26 @@ public sealed class Parser
         return new ReturnStatementSyntax(expression, SpanFrom(returnToken));
     }
 
+    private StatementSyntax ParseThrowStatement()
+    {
+        var throwToken = Match(TokenKind.ThrowKeyword, "Expected 'throw'.");
+        ExpressionSyntax? errorExpression = null;
+        ExpressionSyntax? detailExpression = null;
+
+        if (Current.Kind != TokenKind.SemicolonToken)
+        {
+            errorExpression = ParseExpression();
+            if (Current.Kind == TokenKind.CommaToken)
+            {
+                NextToken();
+                detailExpression = ParseExpression();
+            }
+        }
+
+        Match(TokenKind.SemicolonToken, "Expected ';' after throw statement.");
+        return new ThrowStatementSyntax(errorExpression, detailExpression, SpanFrom(throwToken));
+    }
+
     private StatementSyntax ParseBreakStatement()
     {
         var breakToken = Match(TokenKind.BreakKeyword, "Expected 'break'.");
@@ -464,6 +639,25 @@ public sealed class Parser
         var continueToken = Match(TokenKind.ContinueKeyword, "Expected 'continue'.");
         Match(TokenKind.SemicolonToken, "Expected ';' after continue.");
         return new ContinueStatementSyntax(SpanFrom(continueToken));
+    }
+
+    private StatementSyntax ParseGcStatement()
+    {
+        var gcToken = Match(TokenKind.GcKeyword, "Expected 'gc'.");
+        Match(TokenKind.FatArrowToken, "Expected '=>' after 'gc'.");
+        var body = ParseArrowBody(stopOnElseArrow: false);
+        ConsumeOptionalLegacyBlockTerminator();
+        return new GcStatementSyntax(body, SpanFrom(gcToken));
+    }
+
+    private StatementSyntax ParseJotStatement()
+    {
+        var jotToken = Match(TokenKind.IdentifierToken, "Expected 'Jot'.");
+        Match(TokenKind.OpenParenToken, "Expected '(' after 'Jot'.");
+        var expression = ParseExpression();
+        Match(TokenKind.CloseParenToken, "Expected ')' after Jot argument.");
+        Match(TokenKind.SemicolonToken, "Expected ';' after Jot statement.");
+        return new JotStatementSyntax(expression, SpanFrom(jotToken));
     }
 
     private ExpressionSyntax ParseExpression()
@@ -515,12 +709,31 @@ public sealed class Parser
 
     private ExpressionSyntax ParsePrimaryExpression()
     {
+        var expression = ParsePrimaryAtomExpression();
+        while (Current.Kind == TokenKind.OpenBracketToken)
+        {
+            var openBracket = Match(TokenKind.OpenBracketToken, "Expected '[' for indexing.");
+            var index = ParseExpression();
+            Match(TokenKind.CloseBracketToken, "Expected ']' after index expression.");
+            expression = new IndexExpressionSyntax(expression, index, SpanFrom(openBracket));
+        }
+
+        return expression;
+    }
+
+    private ExpressionSyntax ParsePrimaryAtomExpression()
+    {
         if (Current.Kind == TokenKind.OpenParenToken)
         {
             var open = NextToken();
             var expression = ParseExpression();
             Match(TokenKind.CloseParenToken, "Expected ')' after expression.");
             return new ParenthesizedExpressionSyntax(expression, SpanFrom(open));
+        }
+
+        if (Current.Kind == TokenKind.OpenBracketToken)
+        {
+            return ParseArrayLiteralExpression();
         }
 
         if (Current.Kind is TokenKind.NumberToken or TokenKind.StringToken or TokenKind.CharToken or TokenKind.TrueKeyword or TokenKind.FalseKeyword)
@@ -531,6 +744,11 @@ public sealed class Parser
 
         if (Current.Kind == TokenKind.IdentifierToken)
         {
+            if (IsConstructorExpressionAtCurrent())
+            {
+                return ParseConstructorExpression();
+            }
+
             var (identifier, span) = ParseQualifiedIdentifier("Expected identifier.");
             return new NameExpressionSyntax(identifier, span);
         }
@@ -538,6 +756,47 @@ public sealed class Parser
         var unexpected = NextToken();
         Diagnostics.ReportParserError("Expected expression.", unexpected);
         return new LiteralExpressionSyntax(null, SpanFrom(unexpected));
+    }
+
+    private ExpressionSyntax ParseArrayLiteralExpression()
+    {
+        var openBracket = Match(TokenKind.OpenBracketToken, "Expected '[' to start array literal.");
+        var elements = new List<ExpressionSyntax>();
+
+        while (Current.Kind != TokenKind.CloseBracketToken && Current.Kind != TokenKind.EndOfFileToken)
+        {
+            elements.Add(ParseExpression());
+            if (Current.Kind != TokenKind.CommaToken)
+            {
+                break;
+            }
+
+            NextToken();
+        }
+
+        Match(TokenKind.CloseBracketToken, "Expected ']' to close array literal.");
+        return new ArrayLiteralExpressionSyntax(elements, SpanFrom(openBracket));
+    }
+
+    private ExpressionSyntax ParseConstructorExpression()
+    {
+        var targetType = ParseTypeReference();
+        Match(TokenKind.OpenBracketToken, "Expected '[' to start constructor argument list.");
+        var arguments = new List<ExpressionSyntax>();
+
+        while (Current.Kind != TokenKind.CloseBracketToken && Current.Kind != TokenKind.EndOfFileToken)
+        {
+            arguments.Add(ParseExpression());
+            if (Current.Kind != TokenKind.CommaToken)
+            {
+                break;
+            }
+
+            NextToken();
+        }
+
+        Match(TokenKind.CloseBracketToken, "Expected ']' to close constructor argument list.");
+        return new ConstructorExpressionSyntax(targetType, arguments, targetType.Span);
     }
 
     private bool IsTypedVariableDeclarationAtCurrent()
@@ -579,8 +838,47 @@ public sealed class Parser
         return IsExpressionStart(PeekAbsolute(cursor).Kind);
     }
 
+    private bool IsConstructorExpressionAtCurrent()
+    {
+        if (Current.Kind != TokenKind.IdentifierToken)
+        {
+            return false;
+        }
+
+        var text = Current.Text ?? string.Empty;
+        if (text.Length == 0 || !char.IsUpper(text[0]))
+        {
+            return false;
+        }
+
+        var cursor = _position;
+        if (!TrySkipTypeReference(ref cursor))
+        {
+            return false;
+        }
+
+        return PeekAbsolute(cursor).Kind == TokenKind.OpenBracketToken;
+    }
+
     private bool TrySkipTypeReference(ref int cursor)
     {
+        if (PeekAbsolute(cursor).Kind == TokenKind.OpenBracketToken)
+        {
+            cursor++;
+            if (!TrySkipTypeReference(ref cursor))
+            {
+                return false;
+            }
+
+            if (PeekAbsolute(cursor).Kind != TokenKind.CloseBracketToken)
+            {
+                return false;
+            }
+
+            cursor++;
+            return true;
+        }
+
         if (PeekAbsolute(cursor).Kind != TokenKind.IdentifierToken)
         {
             return false;
@@ -648,9 +946,12 @@ public sealed class Parser
             or TokenKind.LoopKeyword
             or TokenKind.ParalloopKeyword
             or TokenKind.ReturnKeyword
+            or TokenKind.ThrowKeyword
+            or TokenKind.GcKeyword
             or TokenKind.FluxKeyword
             or TokenKind.BreakKeyword
             or TokenKind.ContinueKeyword
+            or TokenKind.PublicKeyword
             or TokenKind.StructKeyword
             or TokenKind.ClassKeyword
             or TokenKind.EnumKeyword
@@ -699,11 +1000,98 @@ public sealed class Parser
             or TokenKind.TrueKeyword
             or TokenKind.FalseKeyword
             or TokenKind.IdentifierToken
+            or TokenKind.OpenBracketToken
             or TokenKind.OpenParenToken
             or TokenKind.PlusToken
             or TokenKind.MinusToken
             or TokenKind.BangToken
             or TokenKind.TildeToken;
+    }
+
+    private bool IsJotStatementAtCurrent()
+    {
+        return Current.Kind == TokenKind.IdentifierToken
+               && string.Equals(Current.Text, "Jot", StringComparison.OrdinalIgnoreCase)
+               && Peek(1).Kind == TokenKind.OpenParenToken;
+    }
+
+    private bool IsIndexedAssignmentAtCurrent()
+    {
+        if (Current.Kind != TokenKind.IdentifierToken)
+        {
+            return false;
+        }
+
+        var cursor = _position;
+        if (!TrySkipQualifiedIdentifier(ref cursor))
+        {
+            return false;
+        }
+
+        if (PeekAbsolute(cursor).Kind != TokenKind.OpenBracketToken)
+        {
+            return false;
+        }
+
+        while (PeekAbsolute(cursor).Kind == TokenKind.OpenBracketToken)
+        {
+            if (!TrySkipBracketExpression(ref cursor))
+            {
+                return false;
+            }
+        }
+
+        return IsAssignmentOperator(PeekAbsolute(cursor).Kind);
+    }
+
+    private bool TrySkipQualifiedIdentifier(ref int cursor)
+    {
+        if (PeekAbsolute(cursor).Kind != TokenKind.IdentifierToken)
+        {
+            return false;
+        }
+
+        cursor++;
+        while (PeekAbsolute(cursor).Kind == TokenKind.DotToken && PeekAbsolute(cursor + 1).Kind == TokenKind.IdentifierToken)
+        {
+            cursor += 2;
+        }
+
+        return true;
+    }
+
+    private bool TrySkipBracketExpression(ref int cursor)
+    {
+        if (PeekAbsolute(cursor).Kind != TokenKind.OpenBracketToken)
+        {
+            return false;
+        }
+
+        var depth = 0;
+        while (true)
+        {
+            var kind = PeekAbsolute(cursor).Kind;
+            if (kind == TokenKind.EndOfFileToken)
+            {
+                return false;
+            }
+
+            if (kind == TokenKind.OpenBracketToken)
+            {
+                depth++;
+            }
+            else if (kind == TokenKind.CloseBracketToken)
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    cursor++;
+                    return true;
+                }
+            }
+
+            cursor++;
+        }
     }
 
     private void EnterVariableScope()
@@ -746,6 +1134,13 @@ public sealed class Parser
             or TokenKind.MinusEqualsToken
             or TokenKind.StarEqualsToken
             or TokenKind.SlashEqualsToken;
+    }
+
+    private static bool IsClassModifierToken(TokenKind kind)
+    {
+        return kind is TokenKind.IdentifierToken
+            or TokenKind.PublicKeyword
+            or TokenKind.GcKeyword;
     }
 
     private int GetUnaryOperatorPrecedence(TokenKind kind)

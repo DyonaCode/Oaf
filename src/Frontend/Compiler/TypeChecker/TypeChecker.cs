@@ -15,11 +15,25 @@ public sealed class TypeChecker
         ExplicitNumeric
     }
 
+    private sealed class ParallelLoopContext
+    {
+        public ParallelLoopContext(int scopeDepth, string iterationVariableName)
+        {
+            ScopeDepth = scopeDepth;
+            IterationVariableName = iterationVariableName;
+        }
+
+        public int ScopeDepth { get; }
+
+        public string IterationVariableName { get; }
+    }
+
     private readonly DiagnosticBag _diagnostics;
     private readonly Dictionary<string, UserDefinedTypeSymbol> _userDefinedTypes = new(StringComparer.Ordinal);
     private readonly HashSet<string> _importedModules = new(StringComparer.Ordinal);
     private string? _currentModule;
     private int _loopDepth;
+    private readonly Stack<ParallelLoopContext> _parallelLoopContexts = new();
 
     public TypeChecker(DiagnosticBag diagnostics)
     {
@@ -32,9 +46,12 @@ public sealed class TypeChecker
     {
         _currentModule = null;
         _importedModules.Clear();
+        _parallelLoopContexts.Clear();
 
         CollectTypeDeclarations(compilationUnit);
         ValidateTypeDeclarations(compilationUnit);
+        _currentModule = null;
+        _importedModules.Clear();
 
         foreach (var statement in compilationUnit.Statements)
         {
@@ -116,11 +133,22 @@ public sealed class TypeChecker
     private void ValidateTypeDeclarations(CompilationUnitSyntax compilationUnit)
     {
         string? moduleContext = null;
+        _currentModule = null;
+        _importedModules.Clear();
+
         foreach (var statement in compilationUnit.Statements)
         {
             if (statement is ModuleDeclarationStatementSyntax moduleDeclaration)
             {
                 moduleContext = moduleDeclaration.ModuleName;
+                _currentModule = moduleContext;
+                _importedModules.Clear();
+                continue;
+            }
+
+            if (statement is ImportStatementSyntax importStatement)
+            {
+                _importedModules.Add(importStatement.ModuleName);
                 continue;
             }
 
@@ -221,6 +249,18 @@ public sealed class TypeChecker
         TypeReferenceSyntax typeReference,
         IReadOnlyDictionary<string, TypeSymbol>? genericScope = null)
     {
+        if (string.Equals(typeReference.Name, "array", StringComparison.Ordinal))
+        {
+            if (typeReference.TypeArguments.Count != 1)
+            {
+                ReportTypeError("Array type requires exactly one element type argument.", typeReference);
+                return PrimitiveTypeSymbol.Error;
+            }
+
+            var elementType = ResolveTypeReference(typeReference.TypeArguments[0], genericScope);
+            return new ArrayTypeSymbol(elementType);
+        }
+
         if (genericScope is not null && genericScope.TryGetValue(typeReference.Name, out var genericTypeParameter))
         {
             if (typeReference.TypeArguments.Count > 0)
@@ -288,11 +328,46 @@ public sealed class TypeChecker
                 CheckAssignment(assignment);
                 break;
 
+            case IndexedAssignmentStatementSyntax indexedAssignment:
+                CheckIndexedAssignment(indexedAssignment);
+                break;
+
+            case MatchStatementSyntax matchStatement:
+                CheckMatchStatement(matchStatement);
+                break;
+
             case ExpressionStatementSyntax expression:
                 CheckExpression(expression.Expression);
                 break;
 
+            case ThrowStatementSyntax throwStatement:
+                if (IsInsideParallelLoopBody())
+                {
+                    ReportTypeError("'throw' is not supported inside counted paralloop bodies.", throwStatement);
+                }
+
+                if (throwStatement.ErrorExpression is not null)
+                {
+                    _ = CheckExpression(throwStatement.ErrorExpression);
+                }
+
+                if (throwStatement.DetailExpression is not null)
+                {
+                    _ = CheckExpression(throwStatement.DetailExpression);
+                }
+
+                break;
+
+            case GcStatementSyntax gcStatement:
+                CheckStatement(gcStatement.Body);
+                break;
+
             case ReturnStatementSyntax returnStatement:
+                if (IsInsideParallelLoopBody())
+                {
+                    ReportTypeError("'return' is not supported inside counted paralloop bodies.", returnStatement);
+                }
+
                 if (returnStatement.Expression is not null)
                 {
                     CheckExpression(returnStatement.Expression);
@@ -316,8 +391,22 @@ public sealed class TypeChecker
                 break;
 
             case LoopStatementSyntax loopStatement:
+                if (IsInsideParallelLoopBody() && loopStatement.IsParallel)
+                {
+                    ReportTypeError("Nested counted paralloops are not currently supported.", loopStatement);
+                }
+
                 var loopExpressionType = CheckExpression(loopStatement.IteratorOrCondition);
-                if (!AreSameType(loopExpressionType, PrimitiveTypeSymbol.Int)
+                var isCountedParallelLoop = loopStatement.IsParallel && !string.IsNullOrWhiteSpace(loopStatement.IterationVariable);
+                if (isCountedParallelLoop)
+                {
+                    if (!AreSameType(loopExpressionType, PrimitiveTypeSymbol.Int)
+                        && !AreSameType(loopExpressionType, PrimitiveTypeSymbol.Error))
+                    {
+                        ReportTypeError("Counted paralloop requires an integer iteration count expression.", loopStatement.IteratorOrCondition);
+                    }
+                }
+                else if (!AreSameType(loopExpressionType, PrimitiveTypeSymbol.Int)
                     && !AreSameType(loopExpressionType, PrimitiveTypeSymbol.Bool)
                     && !AreSameType(loopExpressionType, PrimitiveTypeSymbol.Error))
                 {
@@ -325,16 +414,34 @@ public sealed class TypeChecker
                 }
 
                 Symbols.EnterScope();
-                _loopDepth++;
+                if (!isCountedParallelLoop)
+                {
+                    _loopDepth++;
+                }
 
+                var enteredParallelContext = false;
                 if (!string.IsNullOrWhiteSpace(loopStatement.IterationVariable))
                 {
-                    Symbols.TryDeclare(new VariableSymbol(loopStatement.IterationVariable, PrimitiveTypeSymbol.Int, isMutable: false));
+                    var iterationSymbol = new VariableSymbol(loopStatement.IterationVariable, PrimitiveTypeSymbol.Int, isMutable: false);
+                    Symbols.TryDeclare(iterationSymbol);
+                    if (isCountedParallelLoop)
+                    {
+                        _parallelLoopContexts.Push(new ParallelLoopContext(Symbols.ScopeDepth, iterationSymbol.Name));
+                        enteredParallelContext = true;
+                    }
                 }
 
                 CheckStatement(loopStatement.Body);
 
-                _loopDepth--;
+                if (enteredParallelContext)
+                {
+                    _parallelLoopContexts.Pop();
+                }
+
+                if (!isCountedParallelLoop)
+                {
+                    _loopDepth--;
+                }
                 Symbols.ExitScope();
                 break;
 
@@ -352,6 +459,15 @@ public sealed class TypeChecker
                     ReportTypeError("'continue' can only be used inside a loop.", continueStatement);
                 }
 
+                break;
+
+            case JotStatementSyntax jotStatement:
+                if (IsInsideParallelLoopBody())
+                {
+                    ReportTypeError("'Jot' is not supported inside counted paralloop bodies.", jotStatement);
+                }
+
+                _ = CheckExpression(jotStatement.Expression);
                 break;
 
             case ModuleDeclarationStatementSyntax moduleDeclaration:
@@ -400,13 +516,66 @@ public sealed class TypeChecker
         }
 
         Symbols.TryDeclare(new VariableSymbol(symbolName, variableType, declaration.IsMutable));
+
+        if (TryGetAggregateFields(variableType, out var fields))
+        {
+            DeclareAggregateFieldSymbols(symbolName, declaration.IsMutable, fields, declaration);
+        }
     }
 
     private void CheckAssignment(AssignmentStatementSyntax assignment)
     {
-        if (!TryLookupVariableSymbol(assignment.Identifier, out var symbol))
+        if (!TryLookupVariableSymbolWithScopeDepth(assignment.Identifier, out var symbol, out var scopeDepth))
         {
             ReportTypeError($"Variable '{assignment.Identifier}' is not declared.", assignment);
+            return;
+        }
+
+        var isOuterParallelAssignment = TryGetCurrentParallelLoopContext(out var parallelContext)
+            && scopeDepth > 0
+            && scopeDepth < parallelContext.ScopeDepth;
+
+        if (isOuterParallelAssignment)
+        {
+            if (!symbol.IsMutable)
+            {
+                ReportTypeError($"Variable '{assignment.Identifier}' is immutable and cannot be assigned.", assignment);
+                _ = CheckExpression(assignment.Expression);
+                return;
+            }
+
+            var reductionExpressionType = CheckExpression(assignment.Expression);
+            if (assignment.OperatorKind != TokenKind.PlusEqualsToken)
+            {
+                ReportTypeError(
+                    $"Counted paralloop only supports outer variable reductions using '+=' for '{assignment.Identifier}'.",
+                    assignment);
+                return;
+            }
+
+            if (!AreSameType(symbol.Type, PrimitiveTypeSymbol.Int)
+                && !AreSameType(symbol.Type, PrimitiveTypeSymbol.Error))
+            {
+                ReportTypeError(
+                    $"Counted paralloop '+=' reduction currently requires int target variable '{assignment.Identifier}'.",
+                    assignment);
+            }
+
+            if (!IsIntegerLike(reductionExpressionType)
+                && !AreSameType(reductionExpressionType, PrimitiveTypeSymbol.Error))
+            {
+                ReportTypeError(
+                    $"Counted paralloop '+=' reduction for '{assignment.Identifier}' requires integer contribution expression.",
+                    assignment.Expression);
+            }
+
+            if (ContainsNameReference(assignment.Expression, assignment.Identifier))
+            {
+                ReportTypeError(
+                    $"Counted paralloop '+=' reduction expression for '{assignment.Identifier}' cannot read the reduction variable itself.",
+                    assignment.Expression);
+            }
+
             return;
         }
 
@@ -435,12 +604,103 @@ public sealed class TypeChecker
         }
     }
 
+    private void CheckIndexedAssignment(IndexedAssignmentStatementSyntax indexedAssignment)
+    {
+        if (indexedAssignment.Target is not IndexExpressionSyntax)
+        {
+            ReportTypeError("Indexed assignment requires an index target.", indexedAssignment.Target);
+            _ = CheckExpression(indexedAssignment.Expression);
+            return;
+        }
+
+        if (TryResolveIndexedBaseVariable(indexedAssignment.Target, out var baseVariable) && !baseVariable.IsMutable)
+        {
+            ReportTypeError($"Variable '{baseVariable.Name}' is immutable and cannot be assigned.", indexedAssignment);
+        }
+
+        if (TryGetCurrentParallelLoopContext(out var parallelContext)
+            && TryResolveIndexedBaseVariableWithScopeDepth(indexedAssignment.Target, out _, out var baseScopeDepth)
+            && baseScopeDepth > 0
+            && baseScopeDepth < parallelContext.ScopeDepth
+            && !HasDirectIterationIndex(indexedAssignment.Target, parallelContext.IterationVariableName))
+        {
+            ReportTypeError(
+                $"Counted paralloop indexed writes to outer storage must reference iteration variable '{parallelContext.IterationVariableName}'.",
+                indexedAssignment);
+        }
+
+        var targetType = CheckExpression(indexedAssignment.Target);
+        var expressionType = CheckExpression(indexedAssignment.Expression);
+
+        if (assignmentRequiresNumeric(indexedAssignment.OperatorKind))
+        {
+            if (!IsNumeric(targetType) || !IsNumeric(expressionType))
+            {
+                ReportTypeError($"Operator '{indexedAssignment.OperatorKind}' requires numeric operands.", indexedAssignment);
+            }
+
+            return;
+        }
+
+        var conversion = ClassifyConversion(expressionType, targetType, isExplicit: false);
+        if (conversion == ConversionKind.None)
+        {
+            ReportTypeError($"Cannot assign value of type '{expressionType}' to indexed target of type '{targetType}'.", indexedAssignment);
+        }
+
+        static bool assignmentRequiresNumeric(TokenKind kind)
+        {
+            return kind is TokenKind.PlusEqualsToken
+                or TokenKind.MinusEqualsToken
+                or TokenKind.StarEqualsToken
+                or TokenKind.SlashEqualsToken;
+        }
+    }
+
+    private void CheckMatchStatement(MatchStatementSyntax matchStatement)
+    {
+        var scrutineeType = CheckExpression(matchStatement.Expression);
+        var defaultCount = 0;
+
+        for (var index = 0; index < matchStatement.Arms.Count; index++)
+        {
+            var arm = matchStatement.Arms[index];
+            if (arm.Pattern is null)
+            {
+                defaultCount++;
+                CheckStatement(arm.Body);
+                continue;
+            }
+
+            var patternType = CheckExpression(arm.Pattern);
+            var comparable = IsAssignable(scrutineeType, patternType) || IsAssignable(patternType, scrutineeType);
+            if (!comparable
+                && !AreSameType(scrutineeType, PrimitiveTypeSymbol.Error)
+                && !AreSameType(patternType, PrimitiveTypeSymbol.Error))
+            {
+                ReportTypeError(
+                    $"Match arm {index + 1} pattern type '{patternType}' is not compatible with scrutinee type '{scrutineeType}'.",
+                    arm.Pattern);
+            }
+
+            CheckStatement(arm.Body);
+        }
+
+        if (defaultCount > 1)
+        {
+            ReportTypeError("Match statement can contain at most one default arm ('->').", matchStatement);
+        }
+    }
+
     private TypeSymbol CheckExpression(ExpressionSyntax expression)
     {
         return expression switch
         {
             LiteralExpressionSyntax literal => PrimitiveTypeSymbol.FromLiteral(literal.Value),
             NameExpressionSyntax name => LookupName(name),
+            ConstructorExpressionSyntax constructor => CheckConstructorExpression(constructor),
+            ArrayLiteralExpressionSyntax arrayLiteral => CheckArrayLiteralExpression(arrayLiteral),
+            IndexExpressionSyntax indexExpression => CheckIndexExpression(indexExpression),
             CastExpressionSyntax cast => CheckCastExpression(cast),
             UnaryExpressionSyntax unary => CheckUnaryExpression(unary),
             BinaryExpressionSyntax binary => CheckBinaryExpression(binary),
@@ -456,7 +716,820 @@ public sealed class TypeChecker
             return symbol.Type;
         }
 
+        if (TryResolveEnumVariantType(nameExpression.Identifier, out var enumType))
+        {
+            return enumType;
+        }
+
         ReportTypeError($"Variable '{nameExpression.Identifier}' is not declared.", nameExpression);
+        return PrimitiveTypeSymbol.Error;
+    }
+
+    private TypeSymbol CheckConstructorExpression(ConstructorExpressionSyntax constructorExpression)
+    {
+        if (TryCheckIntrinsicConstructorExpression(constructorExpression, out var intrinsicType))
+        {
+            return intrinsicType;
+        }
+
+        var targetType = ResolveTypeReference(constructorExpression.TargetType);
+        if (AreSameType(targetType, PrimitiveTypeSymbol.Error))
+        {
+            foreach (var argument in constructorExpression.Arguments)
+            {
+                _ = CheckExpression(argument);
+            }
+
+            return PrimitiveTypeSymbol.Error;
+        }
+
+        if (IsOpenGenericDefinition(targetType))
+        {
+            ReportTypeError($"Type '{targetType.Name}' requires explicit type arguments.", constructorExpression.TargetType);
+            foreach (var argument in constructorExpression.Arguments)
+            {
+                _ = CheckExpression(argument);
+            }
+
+            return PrimitiveTypeSymbol.Error;
+        }
+
+        if (!TryGetAggregateFields(targetType, out var fields))
+        {
+            ReportTypeError($"Type '{targetType.Name}' cannot be constructed with '[...]' syntax.", constructorExpression);
+            foreach (var argument in constructorExpression.Arguments)
+            {
+                _ = CheckExpression(argument);
+            }
+
+            return PrimitiveTypeSymbol.Error;
+        }
+
+        if (constructorExpression.Arguments.Count != fields.Count)
+        {
+            ReportTypeError(
+                $"Type '{targetType.Name}' expects {fields.Count} constructor argument(s) but got {constructorExpression.Arguments.Count}.",
+                constructorExpression);
+        }
+
+        var sharedCount = Math.Min(constructorExpression.Arguments.Count, fields.Count);
+        for (var index = 0; index < sharedCount; index++)
+        {
+            var argumentType = CheckExpression(constructorExpression.Arguments[index]);
+            var fieldType = fields[index].Type;
+            var conversion = ClassifyConversion(argumentType, fieldType, isExplicit: false);
+            if (conversion == ConversionKind.None)
+            {
+                ReportTypeError(
+                    $"Cannot assign constructor argument {index + 1} of type '{argumentType}' to field '{fields[index].Name}' of type '{fieldType}'.",
+                    constructorExpression.Arguments[index]);
+            }
+        }
+
+        for (var index = sharedCount; index < constructorExpression.Arguments.Count; index++)
+        {
+            _ = CheckExpression(constructorExpression.Arguments[index]);
+        }
+
+        return targetType;
+    }
+
+    private bool TryCheckIntrinsicConstructorExpression(
+        ConstructorExpressionSyntax constructorExpression,
+        out TypeSymbol intrinsicType)
+    {
+        intrinsicType = PrimitiveTypeSymbol.Error;
+        var intrinsicName = constructorExpression.TargetType.Name;
+
+        switch (intrinsicName)
+        {
+            case "HttpGet":
+            {
+                if (IsInsideParallelLoopBody())
+                {
+                    ReportTypeError("'HttpGet' is not supported inside counted paralloop bodies.", constructorExpression);
+                }
+
+                if (constructorExpression.Arguments.Count != 1)
+                {
+                    ReportTypeError("'HttpGet' expects exactly 1 argument (url).", constructorExpression);
+                    foreach (var argument in constructorExpression.Arguments)
+                    {
+                        _ = CheckExpression(argument);
+                    }
+                }
+                else
+                {
+                    var urlType = CheckExpression(constructorExpression.Arguments[0]);
+                    if (!AreSameType(urlType, PrimitiveTypeSymbol.String) && !AreSameType(urlType, PrimitiveTypeSymbol.Error))
+                    {
+                        ReportTypeError("'HttpGet' url argument must be a string.", constructorExpression.Arguments[0]);
+                    }
+                }
+
+                intrinsicType = PrimitiveTypeSymbol.String;
+                return true;
+            }
+
+            case "HttpSend":
+            {
+                if (IsInsideParallelLoopBody())
+                {
+                    ReportTypeError("'HttpSend' is not supported inside counted paralloop bodies.", constructorExpression);
+                }
+
+                if (constructorExpression.Arguments.Count < 2 || constructorExpression.Arguments.Count > 5)
+                {
+                    ReportTypeError("'HttpSend' expects 2 to 5 arguments: (url, method[, body[, timeout_ms[, headers]]]).", constructorExpression);
+                    foreach (var argument in constructorExpression.Arguments)
+                    {
+                        _ = CheckExpression(argument);
+                    }
+                }
+                else
+                {
+                    var urlType = CheckExpression(constructorExpression.Arguments[0]);
+                    if (!AreSameType(urlType, PrimitiveTypeSymbol.String) && !AreSameType(urlType, PrimitiveTypeSymbol.Error))
+                    {
+                        ReportTypeError("'HttpSend' url argument must be a string.", constructorExpression.Arguments[0]);
+                    }
+
+                    var methodType = CheckExpression(constructorExpression.Arguments[1]);
+                    if (!AreSameType(methodType, PrimitiveTypeSymbol.Int)
+                        && !AreSameType(methodType, PrimitiveTypeSymbol.String)
+                        && !IsEnumType(methodType)
+                        && !AreSameType(methodType, PrimitiveTypeSymbol.Error))
+                    {
+                        ReportTypeError("'HttpSend' method argument must be int, string, or enum.", constructorExpression.Arguments[1]);
+                    }
+
+                    if (constructorExpression.Arguments.Count >= 3)
+                    {
+                        var bodyType = CheckExpression(constructorExpression.Arguments[2]);
+                        if (!AreSameType(bodyType, PrimitiveTypeSymbol.String) && !AreSameType(bodyType, PrimitiveTypeSymbol.Error))
+                        {
+                            ReportTypeError("'HttpSend' body argument must be a string.", constructorExpression.Arguments[2]);
+                        }
+                    }
+
+                    if (constructorExpression.Arguments.Count >= 4)
+                    {
+                        var timeoutType = CheckExpression(constructorExpression.Arguments[3]);
+                        if (!IsIntegerLike(timeoutType) && !AreSameType(timeoutType, PrimitiveTypeSymbol.Error))
+                        {
+                            ReportTypeError("'HttpSend' timeout argument must be an integer.", constructorExpression.Arguments[3]);
+                        }
+                    }
+
+                    if (constructorExpression.Arguments.Count >= 5)
+                    {
+                        var headersType = CheckExpression(constructorExpression.Arguments[4]);
+                        if (!AreSameType(headersType, PrimitiveTypeSymbol.String) && !AreSameType(headersType, PrimitiveTypeSymbol.Error))
+                        {
+                            ReportTypeError("'HttpSend' headers argument must be a string.", constructorExpression.Arguments[4]);
+                        }
+                    }
+                }
+
+                intrinsicType = PrimitiveTypeSymbol.String;
+                return true;
+            }
+
+            case "HttpHeader":
+            {
+                if (constructorExpression.Arguments.Count != 3)
+                {
+                    ReportTypeError("'HttpHeader' expects exactly 3 arguments: (headers, name, value).", constructorExpression);
+                    foreach (var argument in constructorExpression.Arguments)
+                    {
+                        _ = CheckExpression(argument);
+                    }
+                }
+                else
+                {
+                    var headersType = CheckExpression(constructorExpression.Arguments[0]);
+                    if (!AreSameType(headersType, PrimitiveTypeSymbol.String) && !AreSameType(headersType, PrimitiveTypeSymbol.Error))
+                    {
+                        ReportTypeError("'HttpHeader' headers argument must be a string.", constructorExpression.Arguments[0]);
+                    }
+
+                    var nameType = CheckExpression(constructorExpression.Arguments[1]);
+                    if (!AreSameType(nameType, PrimitiveTypeSymbol.String) && !AreSameType(nameType, PrimitiveTypeSymbol.Error))
+                    {
+                        ReportTypeError("'HttpHeader' name argument must be a string.", constructorExpression.Arguments[1]);
+                    }
+
+                    var valueType = CheckExpression(constructorExpression.Arguments[2]);
+                    if (!AreSameType(valueType, PrimitiveTypeSymbol.String) && !AreSameType(valueType, PrimitiveTypeSymbol.Error))
+                    {
+                        ReportTypeError("'HttpHeader' value argument must be a string.", constructorExpression.Arguments[2]);
+                    }
+                }
+
+                intrinsicType = PrimitiveTypeSymbol.String;
+                return true;
+            }
+
+            case "HttpQuery":
+            {
+                if (constructorExpression.Arguments.Count != 3)
+                {
+                    ReportTypeError("'HttpQuery' expects exactly 3 arguments: (url, key, value).", constructorExpression);
+                    foreach (var argument in constructorExpression.Arguments)
+                    {
+                        _ = CheckExpression(argument);
+                    }
+                }
+                else
+                {
+                    var urlType = CheckExpression(constructorExpression.Arguments[0]);
+                    if (!AreSameType(urlType, PrimitiveTypeSymbol.String) && !AreSameType(urlType, PrimitiveTypeSymbol.Error))
+                    {
+                        ReportTypeError("'HttpQuery' url argument must be a string.", constructorExpression.Arguments[0]);
+                    }
+
+                    var keyType = CheckExpression(constructorExpression.Arguments[1]);
+                    if (!AreSameType(keyType, PrimitiveTypeSymbol.String) && !AreSameType(keyType, PrimitiveTypeSymbol.Error))
+                    {
+                        ReportTypeError("'HttpQuery' key argument must be a string.", constructorExpression.Arguments[1]);
+                    }
+
+                    var valueType = CheckExpression(constructorExpression.Arguments[2]);
+                    if (!AreSameType(valueType, PrimitiveTypeSymbol.String) && !AreSameType(valueType, PrimitiveTypeSymbol.Error))
+                    {
+                        ReportTypeError("'HttpQuery' value argument must be a string.", constructorExpression.Arguments[2]);
+                    }
+                }
+
+                intrinsicType = PrimitiveTypeSymbol.String;
+                return true;
+            }
+
+            case "HttpUrlEncode":
+            {
+                if (constructorExpression.Arguments.Count != 1)
+                {
+                    ReportTypeError("'HttpUrlEncode' expects exactly 1 argument (value).", constructorExpression);
+                    foreach (var argument in constructorExpression.Arguments)
+                    {
+                        _ = CheckExpression(argument);
+                    }
+                }
+                else
+                {
+                    var valueType = CheckExpression(constructorExpression.Arguments[0]);
+                    if (!AreSameType(valueType, PrimitiveTypeSymbol.String) && !AreSameType(valueType, PrimitiveTypeSymbol.Error))
+                    {
+                        ReportTypeError("'HttpUrlEncode' value argument must be a string.", constructorExpression.Arguments[0]);
+                    }
+                }
+
+                intrinsicType = PrimitiveTypeSymbol.String;
+                return true;
+            }
+
+            case "HttpClientOpen":
+            {
+                if (IsInsideParallelLoopBody())
+                {
+                    ReportTypeError("'HttpClientOpen' is not supported inside counted paralloop bodies.", constructorExpression);
+                }
+
+                if (constructorExpression.Arguments.Count != 1)
+                {
+                    ReportTypeError("'HttpClientOpen' expects exactly 1 argument (baseUrl).", constructorExpression);
+                    foreach (var argument in constructorExpression.Arguments)
+                    {
+                        _ = CheckExpression(argument);
+                    }
+                }
+                else
+                {
+                    var baseUrlType = CheckExpression(constructorExpression.Arguments[0]);
+                    if (!AreSameType(baseUrlType, PrimitiveTypeSymbol.String) && !AreSameType(baseUrlType, PrimitiveTypeSymbol.Error))
+                    {
+                        ReportTypeError("'HttpClientOpen' baseUrl argument must be a string.", constructorExpression.Arguments[0]);
+                    }
+                }
+
+                intrinsicType = PrimitiveTypeSymbol.Int;
+                return true;
+            }
+
+            case "HttpClientConfigure":
+            {
+                if (IsInsideParallelLoopBody())
+                {
+                    ReportTypeError("'HttpClientConfigure' is not supported inside counted paralloop bodies.", constructorExpression);
+                }
+
+                if (constructorExpression.Arguments.Count != 5)
+                {
+                    ReportTypeError("'HttpClientConfigure' expects exactly 5 arguments: (client, timeout_ms, allow_redirects, max_redirects, user_agent).", constructorExpression);
+                    foreach (var argument in constructorExpression.Arguments)
+                    {
+                        _ = CheckExpression(argument);
+                    }
+                }
+                else
+                {
+                    var clientType = CheckExpression(constructorExpression.Arguments[0]);
+                    if (!IsIntegerLike(clientType) && !AreSameType(clientType, PrimitiveTypeSymbol.Error))
+                    {
+                        ReportTypeError("'HttpClientConfigure' client argument must be an integer handle.", constructorExpression.Arguments[0]);
+                    }
+
+                    var timeoutType = CheckExpression(constructorExpression.Arguments[1]);
+                    if (!IsIntegerLike(timeoutType) && !AreSameType(timeoutType, PrimitiveTypeSymbol.Error))
+                    {
+                        ReportTypeError("'HttpClientConfigure' timeout_ms argument must be an integer.", constructorExpression.Arguments[1]);
+                    }
+
+                    var redirectsType = CheckExpression(constructorExpression.Arguments[2]);
+                    if (!AreSameType(redirectsType, PrimitiveTypeSymbol.Bool) && !AreSameType(redirectsType, PrimitiveTypeSymbol.Error))
+                    {
+                        ReportTypeError("'HttpClientConfigure' allow_redirects argument must be bool.", constructorExpression.Arguments[2]);
+                    }
+
+                    var maxRedirectsType = CheckExpression(constructorExpression.Arguments[3]);
+                    if (!IsIntegerLike(maxRedirectsType) && !AreSameType(maxRedirectsType, PrimitiveTypeSymbol.Error))
+                    {
+                        ReportTypeError("'HttpClientConfigure' max_redirects argument must be an integer.", constructorExpression.Arguments[3]);
+                    }
+
+                    var userAgentType = CheckExpression(constructorExpression.Arguments[4]);
+                    if (!AreSameType(userAgentType, PrimitiveTypeSymbol.String) && !AreSameType(userAgentType, PrimitiveTypeSymbol.Error))
+                    {
+                        ReportTypeError("'HttpClientConfigure' user_agent argument must be a string.", constructorExpression.Arguments[4]);
+                    }
+                }
+
+                intrinsicType = PrimitiveTypeSymbol.Int;
+                return true;
+            }
+
+            case "HttpClientConfigureRetry":
+            {
+                if (IsInsideParallelLoopBody())
+                {
+                    ReportTypeError("'HttpClientConfigureRetry' is not supported inside counted paralloop bodies.", constructorExpression);
+                }
+
+                if (constructorExpression.Arguments.Count != 3)
+                {
+                    ReportTypeError("'HttpClientConfigureRetry' expects exactly 3 arguments: (client, max_retries, retry_delay_ms).", constructorExpression);
+                    foreach (var argument in constructorExpression.Arguments)
+                    {
+                        _ = CheckExpression(argument);
+                    }
+                }
+                else
+                {
+                    var clientType = CheckExpression(constructorExpression.Arguments[0]);
+                    if (!IsIntegerLike(clientType) && !AreSameType(clientType, PrimitiveTypeSymbol.Error))
+                    {
+                        ReportTypeError("'HttpClientConfigureRetry' client argument must be an integer handle.", constructorExpression.Arguments[0]);
+                    }
+
+                    var retriesType = CheckExpression(constructorExpression.Arguments[1]);
+                    if (!IsIntegerLike(retriesType) && !AreSameType(retriesType, PrimitiveTypeSymbol.Error))
+                    {
+                        ReportTypeError("'HttpClientConfigureRetry' max_retries argument must be an integer.", constructorExpression.Arguments[1]);
+                    }
+
+                    var delayType = CheckExpression(constructorExpression.Arguments[2]);
+                    if (!IsIntegerLike(delayType) && !AreSameType(delayType, PrimitiveTypeSymbol.Error))
+                    {
+                        ReportTypeError("'HttpClientConfigureRetry' retry_delay_ms argument must be an integer.", constructorExpression.Arguments[2]);
+                    }
+                }
+
+                intrinsicType = PrimitiveTypeSymbol.Int;
+                return true;
+            }
+
+            case "HttpClientConfigureProxy":
+            {
+                if (IsInsideParallelLoopBody())
+                {
+                    ReportTypeError("'HttpClientConfigureProxy' is not supported inside counted paralloop bodies.", constructorExpression);
+                }
+
+                if (constructorExpression.Arguments.Count != 2)
+                {
+                    ReportTypeError("'HttpClientConfigureProxy' expects exactly 2 arguments: (client, proxy_url).", constructorExpression);
+                    foreach (var argument in constructorExpression.Arguments)
+                    {
+                        _ = CheckExpression(argument);
+                    }
+                }
+                else
+                {
+                    var clientType = CheckExpression(constructorExpression.Arguments[0]);
+                    if (!IsIntegerLike(clientType) && !AreSameType(clientType, PrimitiveTypeSymbol.Error))
+                    {
+                        ReportTypeError("'HttpClientConfigureProxy' client argument must be an integer handle.", constructorExpression.Arguments[0]);
+                    }
+
+                    var proxyType = CheckExpression(constructorExpression.Arguments[1]);
+                    if (!AreSameType(proxyType, PrimitiveTypeSymbol.String) && !AreSameType(proxyType, PrimitiveTypeSymbol.Error))
+                    {
+                        ReportTypeError("'HttpClientConfigureProxy' proxy_url argument must be a string.", constructorExpression.Arguments[1]);
+                    }
+                }
+
+                intrinsicType = PrimitiveTypeSymbol.Int;
+                return true;
+            }
+
+            case "HttpClientDefaultHeaders":
+            {
+                if (IsInsideParallelLoopBody())
+                {
+                    ReportTypeError("'HttpClientDefaultHeaders' is not supported inside counted paralloop bodies.", constructorExpression);
+                }
+
+                if (constructorExpression.Arguments.Count != 2)
+                {
+                    ReportTypeError("'HttpClientDefaultHeaders' expects exactly 2 arguments: (client, headers).", constructorExpression);
+                    foreach (var argument in constructorExpression.Arguments)
+                    {
+                        _ = CheckExpression(argument);
+                    }
+                }
+                else
+                {
+                    var clientType = CheckExpression(constructorExpression.Arguments[0]);
+                    if (!IsIntegerLike(clientType) && !AreSameType(clientType, PrimitiveTypeSymbol.Error))
+                    {
+                        ReportTypeError("'HttpClientDefaultHeaders' client argument must be an integer handle.", constructorExpression.Arguments[0]);
+                    }
+
+                    var headersType = CheckExpression(constructorExpression.Arguments[1]);
+                    if (!AreSameType(headersType, PrimitiveTypeSymbol.String) && !AreSameType(headersType, PrimitiveTypeSymbol.Error))
+                    {
+                        ReportTypeError("'HttpClientDefaultHeaders' headers argument must be a string.", constructorExpression.Arguments[1]);
+                    }
+                }
+
+                intrinsicType = PrimitiveTypeSymbol.Int;
+                return true;
+            }
+
+            case "HttpClientSend":
+            {
+                if (IsInsideParallelLoopBody())
+                {
+                    ReportTypeError("'HttpClientSend' is not supported inside counted paralloop bodies.", constructorExpression);
+                }
+
+                if (constructorExpression.Arguments.Count != 5)
+                {
+                    ReportTypeError("'HttpClientSend' expects exactly 5 arguments: (client, path_or_url, method, body, headers).", constructorExpression);
+                    foreach (var argument in constructorExpression.Arguments)
+                    {
+                        _ = CheckExpression(argument);
+                    }
+                }
+                else
+                {
+                    var clientType = CheckExpression(constructorExpression.Arguments[0]);
+                    if (!IsIntegerLike(clientType) && !AreSameType(clientType, PrimitiveTypeSymbol.Error))
+                    {
+                        ReportTypeError("'HttpClientSend' client argument must be an integer handle.", constructorExpression.Arguments[0]);
+                    }
+
+                    var pathType = CheckExpression(constructorExpression.Arguments[1]);
+                    if (!AreSameType(pathType, PrimitiveTypeSymbol.String) && !AreSameType(pathType, PrimitiveTypeSymbol.Error))
+                    {
+                        ReportTypeError("'HttpClientSend' path_or_url argument must be a string.", constructorExpression.Arguments[1]);
+                    }
+
+                    var methodType = CheckExpression(constructorExpression.Arguments[2]);
+                    if (!AreSameType(methodType, PrimitiveTypeSymbol.Int)
+                        && !AreSameType(methodType, PrimitiveTypeSymbol.String)
+                        && !IsEnumType(methodType)
+                        && !AreSameType(methodType, PrimitiveTypeSymbol.Error))
+                    {
+                        ReportTypeError("'HttpClientSend' method argument must be int, string, or enum.", constructorExpression.Arguments[2]);
+                    }
+
+                    var bodyType = CheckExpression(constructorExpression.Arguments[3]);
+                    if (!AreSameType(bodyType, PrimitiveTypeSymbol.String) && !AreSameType(bodyType, PrimitiveTypeSymbol.Error))
+                    {
+                        ReportTypeError("'HttpClientSend' body argument must be a string.", constructorExpression.Arguments[3]);
+                    }
+
+                    var headersType = CheckExpression(constructorExpression.Arguments[4]);
+                    if (!AreSameType(headersType, PrimitiveTypeSymbol.String) && !AreSameType(headersType, PrimitiveTypeSymbol.Error))
+                    {
+                        ReportTypeError("'HttpClientSend' headers argument must be a string.", constructorExpression.Arguments[4]);
+                    }
+                }
+
+                intrinsicType = PrimitiveTypeSymbol.String;
+                return true;
+            }
+
+            case "HttpClientClose":
+            {
+                if (IsInsideParallelLoopBody())
+                {
+                    ReportTypeError("'HttpClientClose' is not supported inside counted paralloop bodies.", constructorExpression);
+                }
+
+                if (constructorExpression.Arguments.Count != 1)
+                {
+                    ReportTypeError("'HttpClientClose' expects exactly 1 argument (client).", constructorExpression);
+                    foreach (var argument in constructorExpression.Arguments)
+                    {
+                        _ = CheckExpression(argument);
+                    }
+                }
+                else
+                {
+                    var clientType = CheckExpression(constructorExpression.Arguments[0]);
+                    if (!IsIntegerLike(clientType) && !AreSameType(clientType, PrimitiveTypeSymbol.Error))
+                    {
+                        ReportTypeError("'HttpClientClose' client argument must be an integer handle.", constructorExpression.Arguments[0]);
+                    }
+                }
+
+                intrinsicType = PrimitiveTypeSymbol.Int;
+                return true;
+            }
+
+            case "HttpClientRequestsSent":
+            {
+                if (IsInsideParallelLoopBody())
+                {
+                    ReportTypeError("'HttpClientRequestsSent' is not supported inside counted paralloop bodies.", constructorExpression);
+                }
+
+                if (constructorExpression.Arguments.Count != 1)
+                {
+                    ReportTypeError("'HttpClientRequestsSent' expects exactly 1 argument (client).", constructorExpression);
+                    foreach (var argument in constructorExpression.Arguments)
+                    {
+                        _ = CheckExpression(argument);
+                    }
+                }
+                else
+                {
+                    var clientType = CheckExpression(constructorExpression.Arguments[0]);
+                    if (!IsIntegerLike(clientType) && !AreSameType(clientType, PrimitiveTypeSymbol.Error))
+                    {
+                        ReportTypeError("'HttpClientRequestsSent' client argument must be an integer handle.", constructorExpression.Arguments[0]);
+                    }
+                }
+
+                intrinsicType = PrimitiveTypeSymbol.Int;
+                return true;
+            }
+
+            case "HttpClientRetriesUsed":
+            {
+                if (IsInsideParallelLoopBody())
+                {
+                    ReportTypeError("'HttpClientRetriesUsed' is not supported inside counted paralloop bodies.", constructorExpression);
+                }
+
+                if (constructorExpression.Arguments.Count != 1)
+                {
+                    ReportTypeError("'HttpClientRetriesUsed' expects exactly 1 argument (client).", constructorExpression);
+                    foreach (var argument in constructorExpression.Arguments)
+                    {
+                        _ = CheckExpression(argument);
+                    }
+                }
+                else
+                {
+                    var clientType = CheckExpression(constructorExpression.Arguments[0]);
+                    if (!IsIntegerLike(clientType) && !AreSameType(clientType, PrimitiveTypeSymbol.Error))
+                    {
+                        ReportTypeError("'HttpClientRetriesUsed' client argument must be an integer handle.", constructorExpression.Arguments[0]);
+                    }
+                }
+
+                intrinsicType = PrimitiveTypeSymbol.Int;
+                return true;
+            }
+
+            case "HttpLastBody":
+            {
+                if (IsInsideParallelLoopBody())
+                {
+                    ReportTypeError("'HttpLastBody' is not supported inside counted paralloop bodies.", constructorExpression);
+                }
+
+                if (constructorExpression.Arguments.Count != 0)
+                {
+                    ReportTypeError("'HttpLastBody' expects no arguments.", constructorExpression);
+                    foreach (var argument in constructorExpression.Arguments)
+                    {
+                        _ = CheckExpression(argument);
+                    }
+                }
+
+                intrinsicType = PrimitiveTypeSymbol.String;
+                return true;
+            }
+
+            case "HttpLastStatus":
+            {
+                if (IsInsideParallelLoopBody())
+                {
+                    ReportTypeError("'HttpLastStatus' is not supported inside counted paralloop bodies.", constructorExpression);
+                }
+
+                if (constructorExpression.Arguments.Count != 0)
+                {
+                    ReportTypeError("'HttpLastStatus' expects no arguments.", constructorExpression);
+                    foreach (var argument in constructorExpression.Arguments)
+                    {
+                        _ = CheckExpression(argument);
+                    }
+                }
+
+                intrinsicType = PrimitiveTypeSymbol.Int;
+                return true;
+            }
+
+            case "HttpLastError":
+            {
+                if (IsInsideParallelLoopBody())
+                {
+                    ReportTypeError("'HttpLastError' is not supported inside counted paralloop bodies.", constructorExpression);
+                }
+
+                if (constructorExpression.Arguments.Count != 0)
+                {
+                    ReportTypeError("'HttpLastError' expects no arguments.", constructorExpression);
+                    foreach (var argument in constructorExpression.Arguments)
+                    {
+                        _ = CheckExpression(argument);
+                    }
+                }
+
+                intrinsicType = PrimitiveTypeSymbol.String;
+                return true;
+            }
+
+            case "HttpLastReason":
+            {
+                if (IsInsideParallelLoopBody())
+                {
+                    ReportTypeError("'HttpLastReason' is not supported inside counted paralloop bodies.", constructorExpression);
+                }
+
+                if (constructorExpression.Arguments.Count != 0)
+                {
+                    ReportTypeError("'HttpLastReason' expects no arguments.", constructorExpression);
+                    foreach (var argument in constructorExpression.Arguments)
+                    {
+                        _ = CheckExpression(argument);
+                    }
+                }
+
+                intrinsicType = PrimitiveTypeSymbol.String;
+                return true;
+            }
+
+            case "HttpLastContentType":
+            {
+                if (IsInsideParallelLoopBody())
+                {
+                    ReportTypeError("'HttpLastContentType' is not supported inside counted paralloop bodies.", constructorExpression);
+                }
+
+                if (constructorExpression.Arguments.Count != 0)
+                {
+                    ReportTypeError("'HttpLastContentType' expects no arguments.", constructorExpression);
+                    foreach (var argument in constructorExpression.Arguments)
+                    {
+                        _ = CheckExpression(argument);
+                    }
+                }
+
+                intrinsicType = PrimitiveTypeSymbol.String;
+                return true;
+            }
+
+            case "HttpLastHeaders":
+            {
+                if (IsInsideParallelLoopBody())
+                {
+                    ReportTypeError("'HttpLastHeaders' is not supported inside counted paralloop bodies.", constructorExpression);
+                }
+
+                if (constructorExpression.Arguments.Count != 0)
+                {
+                    ReportTypeError("'HttpLastHeaders' expects no arguments.", constructorExpression);
+                    foreach (var argument in constructorExpression.Arguments)
+                    {
+                        _ = CheckExpression(argument);
+                    }
+                }
+
+                intrinsicType = PrimitiveTypeSymbol.String;
+                return true;
+            }
+
+            case "HttpLastHeader":
+            {
+                if (IsInsideParallelLoopBody())
+                {
+                    ReportTypeError("'HttpLastHeader' is not supported inside counted paralloop bodies.", constructorExpression);
+                }
+
+                if (constructorExpression.Arguments.Count != 1)
+                {
+                    ReportTypeError("'HttpLastHeader' expects exactly 1 argument (headerName).", constructorExpression);
+                    foreach (var argument in constructorExpression.Arguments)
+                    {
+                        _ = CheckExpression(argument);
+                    }
+                }
+                else
+                {
+                    var nameType = CheckExpression(constructorExpression.Arguments[0]);
+                    if (!AreSameType(nameType, PrimitiveTypeSymbol.String) && !AreSameType(nameType, PrimitiveTypeSymbol.Error))
+                    {
+                        ReportTypeError("'HttpLastHeader' headerName argument must be a string.", constructorExpression.Arguments[0]);
+                    }
+                }
+
+                intrinsicType = PrimitiveTypeSymbol.String;
+                return true;
+            }
+
+            default:
+                return false;
+        }
+    }
+
+    private TypeSymbol CheckArrayLiteralExpression(ArrayLiteralExpressionSyntax arrayLiteral)
+    {
+        if (arrayLiteral.Elements.Count == 0)
+        {
+            return new ArrayTypeSymbol(PrimitiveTypeSymbol.Unit);
+        }
+
+        var elementType = CheckExpression(arrayLiteral.Elements[0]);
+        for (var index = 1; index < arrayLiteral.Elements.Count; index++)
+        {
+            var candidateType = CheckExpression(arrayLiteral.Elements[index]);
+            if (AreSameType(elementType, candidateType))
+            {
+                continue;
+            }
+
+            if (IsNumeric(elementType) && IsNumeric(candidateType))
+            {
+                elementType = PromoteNumeric(elementType, candidateType);
+                continue;
+            }
+
+            if (ClassifyConversion(candidateType, elementType, isExplicit: false) != ConversionKind.None)
+            {
+                continue;
+            }
+
+            if (ClassifyConversion(elementType, candidateType, isExplicit: false) != ConversionKind.None)
+            {
+                elementType = candidateType;
+                continue;
+            }
+
+            ReportTypeError(
+                $"Array literal element {index + 1} has incompatible type '{candidateType}' (expected '{elementType}').",
+                arrayLiteral.Elements[index]);
+            elementType = PrimitiveTypeSymbol.Error;
+        }
+
+        return new ArrayTypeSymbol(elementType);
+    }
+
+    private TypeSymbol CheckIndexExpression(IndexExpressionSyntax indexExpression)
+    {
+        var targetType = CheckExpression(indexExpression.Target);
+        var indexType = CheckExpression(indexExpression.Index);
+
+        if (!IsIntegerLike(indexType) && !AreSameType(indexType, PrimitiveTypeSymbol.Error))
+        {
+            ReportTypeError("Array index must be an integer value.", indexExpression.Index);
+        }
+
+        if (targetType is ArrayTypeSymbol arrayType)
+        {
+            return arrayType.ElementType;
+        }
+
+        if (!AreSameType(targetType, PrimitiveTypeSymbol.Error))
+        {
+            ReportTypeError($"Cannot index value of type '{targetType}'.", indexExpression.Target);
+        }
+
         return PrimitiveTypeSymbol.Error;
     }
 
@@ -530,18 +1603,22 @@ public sealed class TypeChecker
             TokenKind.LessToken or TokenKind.LessOrEqualsToken or TokenKind.GreaterToken or TokenKind.GreaterOrEqualsToken
                 => ReportBinaryError("Comparison operators require numeric operands.", binary),
 
-            TokenKind.DoubleAmpersandToken or TokenKind.DoublePipeToken or TokenKind.AmpersandToken or TokenKind.PipeToken or TokenKind.BangPipeToken or TokenKind.BangAmpersandToken
+            TokenKind.DoubleAmpersandToken or TokenKind.DoublePipeToken or TokenKind.BangPipeToken or TokenKind.BangAmpersandToken
                 when AreSameType(leftType, PrimitiveTypeSymbol.Bool) && AreSameType(rightType, PrimitiveTypeSymbol.Bool)
                 => PrimitiveTypeSymbol.Bool,
 
-            TokenKind.DoubleAmpersandToken or TokenKind.DoublePipeToken or TokenKind.AmpersandToken or TokenKind.PipeToken or TokenKind.BangPipeToken or TokenKind.BangAmpersandToken
+            TokenKind.DoubleAmpersandToken or TokenKind.DoublePipeToken or TokenKind.BangPipeToken or TokenKind.BangAmpersandToken
                 => ReportBinaryError("Logical operators require bool operands.", binary),
 
-            TokenKind.ShiftLeftToken or TokenKind.ShiftRightToken or TokenKind.UnsignedShiftLeftToken or TokenKind.UnsignedShiftRightToken or TokenKind.CaretToken or TokenKind.CaretAmpersandToken
+            TokenKind.AmpersandToken or TokenKind.PipeToken
+                when AreSameType(leftType, PrimitiveTypeSymbol.Bool) && AreSameType(rightType, PrimitiveTypeSymbol.Bool)
+                => PrimitiveTypeSymbol.Bool,
+
+            TokenKind.AmpersandToken or TokenKind.PipeToken or TokenKind.ShiftLeftToken or TokenKind.ShiftRightToken or TokenKind.UnsignedShiftLeftToken or TokenKind.UnsignedShiftRightToken or TokenKind.CaretToken or TokenKind.CaretAmpersandToken
                 when IsIntegerLike(leftType) && IsIntegerLike(rightType)
                 => PrimitiveTypeSymbol.Int,
 
-            TokenKind.ShiftLeftToken or TokenKind.ShiftRightToken or TokenKind.UnsignedShiftLeftToken or TokenKind.UnsignedShiftRightToken or TokenKind.CaretToken or TokenKind.CaretAmpersandToken
+            TokenKind.AmpersandToken or TokenKind.PipeToken or TokenKind.ShiftLeftToken or TokenKind.ShiftRightToken or TokenKind.UnsignedShiftLeftToken or TokenKind.UnsignedShiftRightToken or TokenKind.CaretToken or TokenKind.CaretAmpersandToken
                 => ReportBinaryError("Bitwise operators require integer operands.", binary),
 
             _ => PrimitiveTypeSymbol.Error
@@ -642,6 +1719,113 @@ public sealed class TypeChecker
                    && leftParameter.Position == rightParameter.Position;
         }
 
+        if (left is ArrayTypeSymbol leftArray && right is ArrayTypeSymbol rightArray)
+        {
+            return AreSameType(leftArray.ElementType, rightArray.ElementType);
+        }
+
+        return false;
+    }
+
+    private bool TryGetAggregateFields(TypeSymbol type, out IReadOnlyList<FieldSymbol> fields)
+    {
+        fields = [];
+
+        switch (type)
+        {
+            case UserDefinedTypeSymbol userDefined when userDefined.Kind is UserDefinedTypeKind.Struct or UserDefinedTypeKind.Class:
+                fields = userDefined.Fields;
+                return true;
+
+            case ConstructedTypeSymbol constructed
+                when constructed.GenericDefinition.Kind is UserDefinedTypeKind.Struct or UserDefinedTypeKind.Class:
+            {
+                var instantiatedFields = new List<FieldSymbol>(constructed.GenericDefinition.Fields.Count);
+                foreach (var field in constructed.GenericDefinition.Fields)
+                {
+                    instantiatedFields.Add(new FieldSymbol(field.Name, InstantiateAggregateFieldType(field.Type, constructed)));
+                }
+
+                fields = instantiatedFields;
+                return true;
+            }
+
+            default:
+                return false;
+        }
+    }
+
+    private static TypeSymbol InstantiateAggregateFieldType(TypeSymbol fieldType, ConstructedTypeSymbol aggregateType)
+    {
+        if (fieldType is GenericTypeParameterSymbol genericParameter
+            && genericParameter.Position >= 0
+            && genericParameter.Position < aggregateType.TypeArguments.Count)
+        {
+            return aggregateType.TypeArguments[genericParameter.Position];
+        }
+
+        if (fieldType is ConstructedTypeSymbol constructedField)
+        {
+            var resolvedArguments = constructedField.TypeArguments
+                .Select(argument => InstantiateAggregateFieldType(argument, aggregateType))
+                .ToList();
+            return new ConstructedTypeSymbol(constructedField.GenericDefinition, resolvedArguments);
+        }
+
+        return fieldType;
+    }
+
+    private void DeclareAggregateFieldSymbols(string aggregateName, bool isMutable, IReadOnlyList<FieldSymbol> fields, SyntaxNode declarationNode)
+    {
+        foreach (var field in fields)
+        {
+            var fieldVariableName = $"{aggregateName}.{field.Name}";
+            if (Symbols.IsDeclaredInCurrentScope(fieldVariableName))
+            {
+                ReportTypeError($"Field variable '{fieldVariableName}' is already declared in this scope.", declarationNode);
+                continue;
+            }
+
+            Symbols.TryDeclare(new VariableSymbol(fieldVariableName, field.Type, isMutable));
+        }
+    }
+
+    private bool TryResolveEnumVariantType(string enumVariantAccess, out TypeSymbol enumType)
+    {
+        enumType = PrimitiveTypeSymbol.Error;
+        var separatorIndex = enumVariantAccess.LastIndexOf('.');
+        if (separatorIndex <= 0 || separatorIndex == enumVariantAccess.Length - 1)
+        {
+            return false;
+        }
+
+        var enumTypeName = enumVariantAccess[..separatorIndex];
+        var variantName = enumVariantAccess[(separatorIndex + 1)..];
+
+        if (!TryLookupTypeSymbol(enumTypeName, out var resolvedType))
+        {
+            return false;
+        }
+
+        if (resolvedType is UserDefinedTypeSymbol enumDefinition && enumDefinition.Kind == UserDefinedTypeKind.Enum)
+        {
+            if (enumDefinition.Variants.Any(variant => string.Equals(variant.Name, variantName, StringComparison.Ordinal)))
+            {
+                enumType = enumDefinition;
+                return true;
+            }
+
+            return false;
+        }
+
+        if (resolvedType is ConstructedTypeSymbol constructed
+            && constructed.GenericDefinition.Kind == UserDefinedTypeKind.Enum
+            && constructed.GenericDefinition.Variants.Any(variant => string.Equals(variant.Name, variantName, StringComparison.Ordinal)))
+        {
+            enumType = constructed;
+            return true;
+        }
+
         return false;
     }
 
@@ -660,6 +1844,16 @@ public sealed class TypeChecker
     private bool IsIntegerLike(TypeSymbol type)
     {
         return AreSameType(type, PrimitiveTypeSymbol.Char) || AreSameType(type, PrimitiveTypeSymbol.Int);
+    }
+
+    private static bool IsEnumType(TypeSymbol type)
+    {
+        return type switch
+        {
+            UserDefinedTypeSymbol userDefined => userDefined.Kind == UserDefinedTypeKind.Enum,
+            ConstructedTypeSymbol constructed => constructed.GenericDefinition.Kind == UserDefinedTypeKind.Enum,
+            _ => false
+        };
     }
 
     private TypeSymbol PromoteNumeric(TypeSymbol left, TypeSymbol right)
@@ -696,17 +1890,41 @@ public sealed class TypeChecker
     {
         if (name.Contains('.', StringComparison.Ordinal))
         {
+            if (Symbols.TryLookup(name, out var exactSymbol) && exactSymbol is not null)
+            {
+                var containerPath = ExtractModuleName(name);
+                if (IsModuleAccessible(containerPath) || HasVariablePrefix(containerPath))
+                {
+                    symbol = exactSymbol;
+                    return true;
+                }
+            }
+
             var moduleName = ExtractModuleName(name);
             if (!IsModuleAccessible(moduleName))
             {
+                if (!string.IsNullOrWhiteSpace(_currentModule))
+                {
+                    var currentQualified = QualifyTopLevelName(_currentModule, name);
+                    if (Symbols.TryLookup(currentQualified, out var currentScoped) && currentScoped is not null)
+                    {
+                        symbol = currentScoped;
+                        return true;
+                    }
+                }
+
+                foreach (var importedModule in _importedModules)
+                {
+                    var importedQualified = QualifyTopLevelName(importedModule, name);
+                    if (Symbols.TryLookup(importedQualified, out var importedScoped) && importedScoped is not null)
+                    {
+                        symbol = importedScoped;
+                        return true;
+                    }
+                }
+
                 symbol = null!;
                 return false;
-            }
-
-            if (Symbols.TryLookup(name, out var exactSymbol) && exactSymbol is not null)
-            {
-                symbol = exactSymbol;
-                return true;
             }
 
             symbol = null!;
@@ -745,6 +1963,51 @@ public sealed class TypeChecker
         }
 
         symbol = null!;
+        return false;
+    }
+
+    private bool TryLookupVariableSymbolWithScopeDepth(string name, out VariableSymbol symbol, out int scopeDepth)
+    {
+        if (!TryLookupVariableSymbol(name, out symbol))
+        {
+            scopeDepth = 0;
+            return false;
+        }
+
+        if (Symbols.TryLookupWithScopeDepth(symbol.Name, out _, out scopeDepth))
+        {
+            return true;
+        }
+
+        if (!name.Contains('.', StringComparison.Ordinal)
+            && Symbols.TryLookupWithScopeDepth(name, out _, out scopeDepth))
+        {
+            return true;
+        }
+
+        scopeDepth = 1;
+        return true;
+    }
+
+    private bool HasVariablePrefix(string dottedPath)
+    {
+        var candidate = dottedPath;
+        while (!string.IsNullOrWhiteSpace(candidate))
+        {
+            if (Symbols.TryLookup(candidate, out var symbol) && symbol is not null)
+            {
+                return true;
+            }
+
+            var separator = candidate.LastIndexOf('.');
+            if (separator <= 0)
+            {
+                break;
+            }
+
+            candidate = candidate[..separator];
+        }
+
         return false;
     }
 
@@ -826,5 +2089,88 @@ public sealed class TypeChecker
     {
         var span = node.Span;
         _diagnostics.ReportTypeError(message, span.Line, span.Column, span.Length);
+    }
+
+    private bool IsInsideParallelLoopBody()
+    {
+        return _parallelLoopContexts.Count > 0;
+    }
+
+    private bool TryGetCurrentParallelLoopContext(out ParallelLoopContext context)
+    {
+        if (_parallelLoopContexts.Count > 0)
+        {
+            context = _parallelLoopContexts.Peek();
+            return true;
+        }
+
+        context = null!;
+        return false;
+    }
+
+    private static bool ContainsNameReference(ExpressionSyntax expression, string identifier)
+    {
+        return expression switch
+        {
+            NameExpressionSyntax name => string.Equals(name.Identifier, identifier, StringComparison.Ordinal),
+            IndexExpressionSyntax index => ContainsNameReference(index.Target, identifier) || ContainsNameReference(index.Index, identifier),
+            UnaryExpressionSyntax unary => ContainsNameReference(unary.Operand, identifier),
+            BinaryExpressionSyntax binary => ContainsNameReference(binary.Left, identifier) || ContainsNameReference(binary.Right, identifier),
+            ParenthesizedExpressionSyntax parenthesized => ContainsNameReference(parenthesized.Expression, identifier),
+            ArrayLiteralExpressionSyntax arrayLiteral => arrayLiteral.Elements.Any(element => ContainsNameReference(element, identifier)),
+            ConstructorExpressionSyntax constructor => constructor.Arguments.Any(argument => ContainsNameReference(argument, identifier)),
+            CastExpressionSyntax cast => ContainsNameReference(cast.Expression, identifier),
+            _ => false
+        };
+    }
+
+    private static bool HasDirectIterationIndex(ExpressionSyntax expression, string identifier)
+    {
+        return expression switch
+        {
+            IndexExpressionSyntax indexExpression =>
+                IsNameReference(indexExpression.Index, identifier)
+                || HasDirectIterationIndex(indexExpression.Target, identifier),
+            _ => false
+        };
+    }
+
+    private static bool IsNameReference(ExpressionSyntax expression, string identifier)
+    {
+        return expression is NameExpressionSyntax name
+            && string.Equals(name.Identifier, identifier, StringComparison.Ordinal);
+    }
+
+    private bool TryResolveIndexedBaseVariable(ExpressionSyntax expression, out VariableSymbol symbol)
+    {
+        switch (expression)
+        {
+            case IndexExpressionSyntax indexExpression:
+                return TryResolveIndexedBaseVariable(indexExpression.Target, out symbol);
+
+            case NameExpressionSyntax name:
+                return TryLookupVariableSymbol(name.Identifier, out symbol);
+
+            default:
+                symbol = null!;
+                return false;
+        }
+    }
+
+    private bool TryResolveIndexedBaseVariableWithScopeDepth(ExpressionSyntax expression, out VariableSymbol symbol, out int scopeDepth)
+    {
+        switch (expression)
+        {
+            case IndexExpressionSyntax indexExpression:
+                return TryResolveIndexedBaseVariableWithScopeDepth(indexExpression.Target, out symbol, out scopeDepth);
+
+            case NameExpressionSyntax name:
+                return TryLookupVariableSymbolWithScopeDepth(name.Identifier, out symbol, out scopeDepth);
+
+            default:
+                symbol = null!;
+                scopeDepth = 0;
+                return false;
+        }
     }
 }
